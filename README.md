@@ -14,7 +14,7 @@ Initial results obtained using the simulator are presented in [[1](#1), [2](#2)]
 
 As the simulator is implemented in Python, no installation is required. The only thing needed to run the simulator is a Python Interpreter for Python version 3.7 or higher, the python files *network_sim.py*, *netlist_generation.py*, *hardware_graph.py* and *sim_log.py*, and the config file *config.ini*.  
   
-Additionally, a netlist file or a connectivity matrix file is required unless one of the implemented test cases is used. More information on the implemented test cases can be found in *Network Simulator.pdf*. Two exemplary matrix files are also included in this repository and can be found in the folder matrix_files.
+Additionally, a netlist file or a connectivity matrix file is required unless one of the implemented test cases is used. More information on the implemented test cases can be found in *Network Simulator.pdf* (will be uploaded soon). Two exemplary matrix files are also included in this repository and can be found in the folder matrix_files.
 
 ## Running the Simulator
 ---
