@@ -1,7 +1,8 @@
 """
 netlist_generation.py
 
-Copyright (C) 2022, R. Kleijnen, Forschungszentrum Jülich, Central Institute of Engineering, Electronics and Analytics—Electronic Systems (ZEA-2)
+Copyright (C) 2022, R. Kleijnen, Forschungszentrum Jülich,
+Central Institute of Engineering, Electronics and Analytics—Electronic Systems (ZEA-2)
 
 This file is part of NeuCoNS.
 NeuCoNS is a free application: you can redistribute it and/or modify it under the terms
@@ -35,15 +36,16 @@ def netlist_factory(testcase):
 	elif testcase.lower() == 'brunel':
 		generator = TwoPopulationNetwork_Brunel
 	elif testcase.lower() == 'potjansdiesmann' or testcase.lower() == 'potjans_diesmann' \
-			or testcase.lower() == 'corticalmicrocircuit' or testcase.lower() == 'cortical_microcircuit':
+		or testcase.lower() == 'corticalmicrocircuit' or testcase.lower() == 'cortical_microcircuit':
 		generator = CorticalMicrocircuit_PotjansDiesmann
 	elif testcase.lower() == 'cm_benchmark'\
-			or testcase.lower() == 'corticalmicrocircuit_benchmark' or testcase.lower() == 'cortical_microcircuit_benchmark':
+		or testcase.lower() == 'corticalmicrocircuit_benchmark' or testcase.lower() == 'cortical_microcircuit_benchmark':
 		generator = CorticalMicrocircuit_Benchmark
 	elif testcase.lower() == 'file':
 		generator = read_netlist_file
 	else:
 		sim_log.fatal_error(f"Testcase type {testcase} not defined")
+		generator = None
 	return generator
 
 
@@ -71,14 +73,24 @@ def read_netlist_file(file_name = ''):
 
 
 # If FR_defined=True, the third column of the matrix is read as the firing rate of the populations
-def read_connectivity_probability_matrix(file_name, FR_defined=False, delimiter='\t'):
-	file_name = '../' + file_name
+def read_connectivity_probability_matrix(file_name, delimiter='\t'):
+	file_name = file_name
 	connectivity_matrix = []
 	with open(file_name, 'r') as matrix_file:
 		lines = matrix_file.readlines()
+		if len(lines) + 3 == len(lines[0].split(delimiter)):
+			FR_defined = True
+			sim_log.message(f'Matrix file loaded with specified firing rates.')
+		elif len(lines) + 2 == len(lines[0].split(delimiter)):
+			FR_defined = False
+			sim_log.message(f'Matrix file loaded without specified firing rates.')
+		else:
+			sim_log.fatal_error(
+				f'The format of the matrix-file looks incorrect.\n'
+				f'{len(lines)}')
 		for line in lines:
-			line = line.strip('\n').split(delimiter)
 			try:
+				line = line.strip('\n').split(delimiter)
 				if FR_defined:
 					connectivity_matrix.append(
 						{
@@ -145,7 +157,7 @@ def randomly_connected_NN(n = 1000, epsilon = 0.1, netlist_name = None, path = '
 		f'Save netlist in {os.getcwd() + file_name}.json')
 
 	if path:
-		with open(path + file_name + '.json','w+') as file:
+		with open(path + file_name + '.json', 'w+') as file:
 			json.dump(netlist, file)
 
 	return netlist, path + file_name + '.json'
@@ -189,7 +201,7 @@ def randomly_connected_NN_C(n = 1000, connections = 100, netlist_name = None, pa
 		f'\tNumber of neurons = {n}\n\tConnection probability = {connections}\n\tNr. of synapses = {nr_synapses}\n'
 		f'Save netlist in {os.getcwd() + file_name}.json')
 	if path:
-		with open(path + file_name + '.json','w+') as file:
+		with open(path + file_name + '.json', 'w+') as file:
 			json.dump(netlist, file)
 
 	return netlist, path + file_name + '.json'
@@ -228,7 +240,7 @@ def Hopfield_NN(n = 1000, netlist_name = None, path = ''):
 		f'\tNumber of neurons = {n}\n\tNr. of synapses = {n * n}\n'
 		f'Save netlist in {os.getcwd() + file_name}.json')
 	if path:
-		with open(path + file_name + '.json','w+') as file:
+		with open(path + file_name + '.json', 'w+') as file:
 			json.dump(netlist, file)
 
 	return netlist, path + file_name + '.json'
@@ -356,7 +368,7 @@ def TwoPopulationNetwork_VogelsAbbott(n = 10000, beta = 0.8, epsilon = 0.01, m =
 			'connected_to': []}
 		for j in range(n):
 			p = random.random()
-			if p < epsilon and  i != j - Ne:
+			if p < epsilon and i != j - Ne:
 				if j < Ne:
 					netlist['I_' + str(i)]['connected_to'].append('E_' + str(j))
 					nr_synapses += 1
@@ -588,7 +600,7 @@ def CorticalMicrocircuit_Benchmark(N=0.5, K=0.2, netlist_name = None, path = '')
 
 		sim_log.notice(
 			f'Loaded netlist contains {len(netlist)} neurons. '
-			f'Sould be roughly {round(78071 * scale_factor)} +/- 24 neurons. '
+			f'Sould be roughly {round(78071 * N)} +/- 24 neurons. '
 			f'If not, the old netlist might be incomplete or corrupted.'
 			f'Rename or remove existing file and restart simulator to force generation a new netlist file.')
 		return netlist, path + file_name + '.json'
@@ -676,7 +688,8 @@ def CorticalMicrocircuit_Benchmark(N=0.5, K=0.2, netlist_name = None, path = '')
 		}
 	}
 
-	NPops = {'L2/3E': int(20683 * N),
+	NPops = {
+		'L2/3E': int(20683 * N),
 		'L2/3I': int(5834 * N),
 		'L4E': int(21915 * N),
 		'L4I': int(5479 * N),

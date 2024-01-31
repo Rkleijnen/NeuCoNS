@@ -17,27 +17,14 @@ You should have received a copy of the GNU General Public License
 along with NeuCoNS. If not, see <https://www.gnu.org/licenses/>.
 """
 
-from math import inf, ceil, floor, exp, log2, pi, sqrt
+from math import inf, ceil, floor, sqrt
 import sim_log
 import time
 import random
 import statistics
-import ctypes
 
 t_link = 0
 t_router = 1
-
-
-def probability_function(distance, pdf_type = 'Non Given', c = 0, r_half = 0, sigma = 0, lambda_ = 0, **rest_args):
-	if pdf_type.lower() == 'inverse':
-		return c / (r_half * distance + 1)
-	elif pdf_type.lower() == 'normal' or pdf_type == 'gaussian' or pdf_type == 'bell curve':
-		return c / (2 * pi) * exp(- 0.5 * (distance / sigma)**2)
-	elif pdf_type.lower() == 'exponential':
-		return c / (2 * pi * lambda_**2) * exp(-distance / lambda_)
-	else:
-		print(f'Probability density function "{pdf_type}" was not recognized')
-		raise sim_log.SimError
 
 
 def convert_time(time_seconds):
@@ -117,19 +104,19 @@ def read_populations(netlist):
 
 
 def extract_areas(matrix):
-	area_dict = {}
-	matrix_populations = {}
+	area_sizes = {}
+	area_populations = {}
 	for population in matrix:
 		area, pop = population['population'].split('-')
 		size = population['neurons']
-		area_dict[area] = area_dict.get(area, 0) + size
-		matrix_populations[area] = matrix_populations.get(area, []) + [pop]
+		area_sizes[area] = area_sizes.get(area, 0) + size
+		area_populations[area] = area_populations.get(area, []) + [pop]
 
-	area_matrix = []
-	for area, size in area_dict.items():
-		area_matrix.append({'area': area, 'neurons': size})
+	area_size_matrix = []
+	for area, size in area_sizes.items():
+		area_size_matrix.append({'area': area, 'neurons': size})
 
-	return area_matrix, matrix_populations
+	return area_size_matrix, area_populations
 
 
 def sort_groups(matrix):
@@ -149,7 +136,6 @@ def sort_groups(matrix):
 	return sorted_list
 
 
-# noinspection SpellCheckingInspection
 class Network:
 	def __init__(self):
 		self.nodes = {}
@@ -167,21 +153,19 @@ class Network:
 			self.weight = weight
 			self.packets_handled = 0
 
-	"""
-	================
-	simulation methods
-	================
-	"""
+	####################################################################################################################
+	# Simulation Methods
+	####################################################################################################################
 	def send_spike(self, occupied_links):
 		for link, FR in occupied_links.items():
 			try:
 				self.nodes[link[0]].edges[link[1]].packets_handled += FR
-				if not link[1] == 'Spectrum':
-					self.nodes[link[1]].ext_packets_handled += FR
+				self.nodes[link[1]].ext_packets_handled += FR
 			except KeyError:
 				print(link)
-				print(link[1])
-				sim_log.fatal_error('')
+				sim_log.fatal_error(
+					'Sending spike over nonexisting link.\n'
+					'Check whether routing algorithm operates as inteded or network is created incorrectly.')
 
 	def reset_traffic(self):
 		for node in self.nodes:
@@ -205,11 +189,9 @@ class Network:
 				except KeyError:
 					continue
 
-	"""
-	================
-	Building methods
-	================
-	"""
+	####################################################################################################################
+	# Construction Methods
+	####################################################################################################################
 	def add_node(self, key):
 		if key in self.nodes:
 			sim_log.warning(f'add_node({key}): A node with the key {key} already exists.')
@@ -276,11 +258,9 @@ class Network:
 				else:
 					del self.nodes[key[1]].edges[key[0]]
 
-	"""
-	================
-	Factory methods
-	================
-	"""
+	####################################################################################################################
+	# Factory Methods
+	####################################################################################################################
 	def routing_algorithm(self, routing_type):
 		if routing_type.lower() == 'spr' or routing_type.lower() == 'dijkstra':
 			return self.dijkstra
@@ -291,9 +271,10 @@ class Network:
 			raise sim_log.RoutingError
 
 	def mapping_module(self, mapping_type):
+		# Mapping modules are used for the netlist based simulations
 		if mapping_type.lower() == 'random':
 			return self.random_placement
-		elif mapping_type.lower() == 'sequentially':
+		elif mapping_type.lower() == 'sequential':
 			return self.sequential_placement
 		else:
 			sim_log.error(
@@ -304,7 +285,7 @@ class Network:
 	def population_mapping(self, mapping_type):
 		if mapping_type.lower() == 'random':
 			return self.random_population_mapping
-		if mapping_type.lower() == 'sequential':
+		elif mapping_type.lower() == 'sequential':
 			return self.sequential_population_mapping
 		else:
 			sim_log.error(
@@ -312,12 +293,10 @@ class Network:
 				f'Continue with next iteration.')
 			raise sim_log.MappingError
 
-	"""
-	================
-	Casting methods
-	================
-	"""
-	def broadcast(self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, **kargs):
+	####################################################################################################################
+	# Casting Methods
+	####################################################################################################################
+	def broadcast(self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, **_kwargs):
 		routing_fnc = self.routing_algorithm(routing_type)
 		latency = {}
 		destinations = list(self.nodes.keys())
@@ -349,7 +328,7 @@ class Network:
 
 		return Node_ID, occupied_links, number_of_spikes, latency
 
-	def unicast(self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, LMC = False, **kargs):
+	def unicast(self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, LMC = False, **_kwargs):
 		routing_fnc = self.routing_algorithm(routing_type)
 		latency = {}
 		destinations = {}
@@ -382,6 +361,8 @@ class Network:
 
 				if LMC:
 					probability_dict = self.destination_nodes_probabilities(population_index, matrix)
+				else:
+					probability_dict = {}
 
 				for i in range(tally):
 					if LMC:
@@ -414,10 +395,10 @@ class Network:
 
 		return Node_ID, occupied_links, number_of_spikes, latency
 
-	def local_multicast(self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, **kargs):
-		return self.unicast(Node_ID, Node_object, routing_type, LMC=True, netlist=netlist, matrix=matrix, **kargs)
+	def local_multicast(self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, **kwargs):
+		return self.unicast(Node_ID, Node_object, routing_type, LMC=True, netlist=netlist, matrix=matrix, **kwargs)
 
-	def multicast(self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, **kargs):
+	def multicast(self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, **_kwargs):
 		routing_fnc = self.routing_algorithm(routing_type)
 		latency = {}
 		destinations_node = {}
@@ -449,6 +430,7 @@ class Network:
 					neuron_ID = f'{Node_ID}_{population}_{i}'
 					destinations_node[neuron_ID] = destinations
 					firing_rate[neuron_ID] = matrix[population_index].get('FR', 1)
+
 		else:
 			sim_log.error(
 				f'Either a NN netlist or a connectivity probability matrix is required to run the simulation.\n'
@@ -459,7 +441,6 @@ class Network:
 		if routing_type.lower() == 'espr' or routing_type.lower() == 'ner':
 			for neuron, destinations_neuron in destinations_node.items():
 				paths, distances = routing_fnc(Node_ID, destinations_neuron)
-				#TODO: Check whether this module is faster than convert_path_to_route_uc + list(set(routes))
 				routes = convert_path_to_route(paths, destinations_neuron)
 
 				number_of_spikes += firing_rate[neuron]
@@ -468,6 +449,7 @@ class Network:
 						occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
 
 				latency[neuron] = max([distances[target_Node] for target_Node in destinations_neuron])
+
 		else:
 			all_destinations = \
 				[dest for destinations_neuron in destinations_node.values() for dest in destinations_neuron]
@@ -491,11 +473,9 @@ class Network:
 
 		return Node_ID, occupied_links, number_of_spikes, latency
 
-	"""
-	================
-	Routing methods
-	================
-	"""
+	####################################################################################################################
+	# Routing Methods
+	####################################################################################################################
 	def dijkstra(self, source, destinations):
 		visited = []
 		# The path dictionary points to the previous node on the route coming from the source, taking the shortest path
@@ -555,12 +535,10 @@ class Network:
 
 		return sorted_list
 
-	"""
-	================
-	Mapping Algorithms
-	================
-	"""
-	def random_placement(self, netlist, NpN, **rest_args):
+	####################################################################################################################
+	# Mapping Methods
+	####################################################################################################################
+	def random_placement(self, NpN, netlist, **_kwargs):
 		sim_log.message('Determining mapping of neurons... (Randomly)')
 		T0 = time.time()
 		nr_neurons = len(netlist)
@@ -590,7 +568,7 @@ class Network:
 			f'Mapped {len(netlist)} neurons to hardware in {convert_time(time.time() - T0)}.\n'
 			f'Hardware utilization: {round(len(netlist) / (len(self.nodes) * NpN) * 1000) / 10}%\n')
 
-	def sequential_placement(self, netlist, NpN, **rest_args):
+	def sequential_placement(self, NpN, netlist, **_kwargs):
 		sim_log.message('Determining mapping of neurons... (Sequential)')
 		T0 = time.time()
 		nr_neurons = len(netlist)
@@ -624,8 +602,8 @@ class Network:
 			f'Mapped {len(netlist)} neurons to hardware in {convert_time(time.time() - T0)}.\n'
 			f'Hardware utilization: {round(len(netlist) / (len(self.nodes) * NpN) * 1000) / 10}%\n')
 
-	def sequential_population_mapping(self, NpN, matrix, **rest_args):
-		sim_log.message('Determining mapping of neurons... (Population Ordered)')
+	def sequential_population_mapping(self, NpN, matrix, neuron_model = 'population', **_kwargs):
+		sim_log.message('Determining mapping of neurons... (Sequential)')
 		T0 = time.time()
 		network_size = sum([population["neurons"] for population in matrix])
 		ratio = 0
@@ -635,11 +613,18 @@ class Network:
 		Nodes = list(self.nodes.keys())
 		current_node = Nodes.pop(0)
 		mapped_to_node = 0
+		previous_area = ''
 
 		for population in matrix:
 			population_name = population['population']
 			population_size = population['neurons']
 			neuron_counter = 0
+
+			if neuron_model.lower() == 'area' and mapped_to_node != 0 and (previous_area != population['population'].split('-')):
+				# Continue to the next node, even if the current one is not full yet, in case different neuron
+				# models per node are not allowed
+				current_node = Nodes.pop(0)
+				mapped_to_node = 0
 
 			try:
 				while neuron_counter < population_size:
@@ -652,7 +637,7 @@ class Network:
 						if round(neurons_placed / network_size * 1000) / 10 > ratio:
 							ratio = round(neurons_placed / network_size * 1000) / 10
 							print(
-								f'Mapping neurons randomly to network\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
+								f'Mapping neurons to network\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
 
 					else:
 						check_sum = sum([tally for tally, pop in self.nodes[current_node].neurons])
@@ -665,6 +650,15 @@ class Network:
 
 						current_node = Nodes.pop(0)
 						mapped_to_node = 0
+
+				if neuron_model.lower() == 'population' and neurons_placed < network_size:
+					# Continue to the next node, even if the current one is not full yet, in case different neuron
+					# models per node are not allowed
+					current_node = Nodes.pop(0)
+					mapped_to_node = 0
+
+				previous_area = population['population'].split('-')
+
 			except IndexError:
 				sim_log.error(
 					f'All nodes have been filled.\n{neurons_placed} neurons have been placed, '
@@ -675,7 +669,7 @@ class Network:
 			f'Mapped {network_size} neurons to hardware in {convert_time(time.time() - T0)}.\n'
 			f'Hardware utilization: {round(network_size / (len(self.nodes) * NpN) * 1000) / 10}%\n')
 
-	def random_population_mapping(self, NpN, matrix, **rest_args):
+	def random_population_mapping(self, NpN, matrix, **_kwargs):
 		sim_log.message('Determining mapping of neurons... (Randomly)')
 		T0 = time.time()
 		network_size = sum([population["neurons"] for population in matrix])
@@ -718,11 +712,9 @@ class Network:
 			f'Mapped {network_size} neurons to hardware in {convert_time(time.time() - T0)}.\n'
 			f'Hardware utilization: {round(network_size / (len(self.nodes) * NpN) * 1000) / 10}%\n')
 
-	"""
-	================
-	On-the-Fly Netlist generation (HW-dependent and Matrix defined)
-	================
-	"""
+	####################################################################################################################
+	# On-the-Fly Netlist generation (HW-dependent and Matrix defined)
+	####################################################################################################################
 	def fill_network(self, NpN):
 		for Node in self.nodes:
 			for neuron in range(NpN):
@@ -772,12 +764,10 @@ class Network:
 		distance = (deltas[0]**2 + deltas[1]**2)**(1 / 2)
 		return distance
 
-	"""
-	================
-	Output functions
-	================
-	"""
-	def readout(self, unused, compressed = None):
+	####################################################################################################################
+	# Output Methods
+	####################################################################################################################
+	def readout(self, unused):
 		output = {}
 		int_lst = []
 		ext_lst = []
@@ -825,12 +815,7 @@ class Network:
 			'median': statistics.median(link_lst)
 		}
 
-		if not compressed:
-			return output
-		elif compressed.lower() == 'node':
-			return router_total
-		elif compressed.lower() == 'link':
-			return link_lst
+		return output
 
 
 class Mesh4(Network):
@@ -842,11 +827,9 @@ class Mesh4(Network):
 		self.create_network(size)
 		self.type = 'Mesh4'
 
-	"""
-	================
-	Building methods
-	================
-	"""
+	####################################################################################################################
+	# Construction Methods
+	####################################################################################################################
 	def create_network(self, size):
 		T0 = time.time()
 		if type(size) == int:
@@ -890,12 +873,46 @@ class Mesh4(Network):
 		elif self.torus:
 			self.add_edge(node, (x_coord, (y_coord - length) % self.size[1]), length)
 
-	"""
-	================
-	Routing methods
-	================
-	Top-level
-	"""
+	####################################################################################################################
+	# Factory Methods
+	####################################################################################################################
+	def routing_algorithm(self, routing_type):
+		if routing_type.lower() == 'dor':
+			return self.dimension_order_routing
+		elif routing_type.lower() == 'ldfr':
+			return self.longest_dimension_first_routing
+		elif routing_type.lower() == 'spr' or routing_type.lower() == 'dijkstra':
+			return self.dijkstra
+		elif routing_type.lower() == 'espr':
+			return self.enhanced_shortest_path
+		elif routing_type.lower() == 'ner':
+			return self.neighbour_exploration_routing
+		else:
+			sim_log.error(
+				f'Given routing algorithm {routing_type} is not recognized or implemented. '
+				f'Continue with next iteration.')
+			raise sim_log.RoutingError
+
+	def population_mapping(self, mapping_type):
+		if mapping_type.lower() == 'random':
+			return self.random_population_mapping
+		elif mapping_type.lower() == 'sequential':
+			return self.sequential_population_mapping
+		elif mapping_type.lower() == 'population_grouping':
+			return self.population_grouping
+		elif mapping_type.lower() == 'area_grouping':
+			return self.area_grouping
+		elif mapping_type.lower() == 'space_filling_curve':
+			return self.space_filling_curve
+		else:
+			sim_log.error(
+				f'Given mapping algorithm {mapping_type} is not recognized or implemented. '
+				f'Continue with next iteration.')
+			raise sim_log.MappingError
+
+	####################################################################################################################
+	# Routing Methods
+	####################################################################################################################
 	def dimension_order_routing(self, source, destinations):
 		# Prioritizes movement in the x-direction over movement in the y direction (and movement in the w direction)
 		distance = {source: t_router}
@@ -956,10 +973,12 @@ class Mesh4(Network):
 			else:
 				current_node = source
 
-			delta_x, delta_y = self.delta(source, destination)
+			delta_x, delta_y, delta_w, delta_v = self.delta(source, destination)
 			deltas = {
 				'x': delta_x,
-				'y': delta_y
+				'y': delta_y,
+				'w': delta_w,
+				'v': delta_v
 			}
 
 			while deltas:
@@ -967,7 +986,14 @@ class Mesh4(Network):
 				direction = max(temp, key=temp.get)
 				delta = deltas[direction]
 
-				x, y = direction == 'x', direction == 'y'
+				if direction == 'x':
+					x, y = 1, 0
+				elif direction == 'y':
+					x, y = 0, 1
+				elif direction == 'w':
+					x, y = 1, 1
+				else:
+					x, y = 1, -1
 
 				while delta:
 					next_node = \
@@ -1005,7 +1031,6 @@ class Mesh4(Network):
 			# Continue with the next closest unvisited destination
 			current_node = destinations_sorted.pop(0)
 			path.update(self.path_to_intermediate_node(source, current_node, distances))
-
 		return path, distances
 
 	def neighbour_exploration_routing(self, source, destinations):
@@ -1031,12 +1056,13 @@ class Mesh4(Network):
 			if abs(delta_y) > 1 / 2 * self.size[1]:
 				delta_y -= sign(delta_y) * self.size[1]
 
-		return [delta_x, delta_y]
+		return [delta_x, delta_y, 0, 0]
 
 	def path_to_intermediate_node(self, source, destination, distances):
 		# Will refer to the nodes as follow: s=source, d=destination & c=intermediate node
 		delta_sd = self.delta(source, destination)
 		closest_nodes = self.distance_sort(destination, distances.keys())
+
 		for c in closest_nodes:
 			delta_sc = self.delta(source, c)
 			# Check whether the current node lies on a direct path from source to destination
@@ -1048,7 +1074,7 @@ class Mesh4(Network):
 				del path[c]
 				del latency[c]
 				for node, distance_to_c in latency.items():
-					distances[node] = distances[c] + distance_to_c
+					distances[node] = distances[c] + distance_to_c - t_router
 
 				return path
 		sim_log.fatal_error(f'No closest node found, not even the original source.')
@@ -1060,94 +1086,64 @@ class Mesh4(Network):
 		del path[branch_node]
 		del latency[branch_node]
 		for node, distance_from_branch in latency.items():
-			distances[node] = distances[branch_node] + distance_from_branch
+			distances[node] = distances[branch_node] + distance_from_branch - t_router
 
 		return path
 
-	"""
-	================
-	Factory methods
-	================
-	"""
-	def routing_algorithm(self, routing_type):
-		if routing_type.lower() == 'dor':
-			return self.dimension_order_routing
-		elif routing_type.lower() == 'ldfr':
-			return self.longest_dimension_first_routing
-		elif routing_type.lower() == 'spr' or routing_type.lower() == 'dijkstra':
-			return self.dijkstra
-		elif routing_type.lower() == 'espr':
-			return self.enhanced_shortest_path
-		elif routing_type.lower() == 'ner':
-			return self.neighbour_exploration_routing
-		else:
-			sim_log.error(
-				f'Given routing algorithm {routing_type} is not recognized or implemented. '
-				f'Continue with next iteration.')
-			raise sim_log.RoutingError
-
-	def population_mapping(self, mapping_type):
-		if mapping_type.lower() == 'random':
-			return self.random_population_mapping
-		if mapping_type.lower() == 'sequential':
-			return self.sequential_population_mapping
-		if mapping_type.lower() == 'population_grouping':
-			return self.population_grouping
-		if mapping_type.lower() == 'area_grouping':
-			return self.area_grouping
-		else:
-			sim_log.error(
-				f'Given mapping algorithm {mapping_type} is not recognized or implemented. '
-				f'Continue with next iteration.')
-			raise sim_log.MappingError
-
-	"""
-	================
-	Mapping Algorithms
-	================
-	"""
-	def population_grouping(self, NpN, matrix, sort = True, **rest_args):
+	####################################################################################################################
+	# Mapping Methods
+	####################################################################################################################
+	def population_grouping(self, NpN, matrix, sort = False, neuron_model = 'population', **_kwargs):
 		sim_log.message('Determining mapping of neurons... (Population Grouping)')
 
 		T0 = time.time()
 		network_size = sum([population["neurons"] for population in matrix])
 		ratio = 0
 		neurons_placed = 0
-		print(f'Mapping neurons to network, grouped per area\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
+		print(f'Mapping neurons to network, grouped per population\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
 
 		rows_filled = 0
-		population_dict = {pop['population']: {'neurons': pop['neurons']} for pop in matrix}
 
 		if sort:
 			populations = sort_groups(matrix)
+		else:
+			populations = [population for population in matrix]
 
 		neurons_in_row = 0
 		x = 0
 		dx = 1
 		i = 0
 		fill_path = []
+		end_node = (-1, -1)
+
 		while 1:
-			neurons_in_row += populations[i]['neurons']
+			if neuron_model == 'population':
+				neurons_in_row += ceil(populations[i]['neurons'] / NpN) * NpN
+			else:
+				neurons_in_row += populations[i]['neurons']
 
 			width = sqrt(populations[i]['neurons'] / NpN)
 
 			while i < len(populations) - 1 and width + sqrt(populations[i + 1]['neurons'] / NpN) < self.size[0]:
 				i += 1
 				width += sqrt(populations[i]['neurons'] / NpN)
-				neurons_in_row += populations[i]['neurons']
+
+				if neuron_model == 'population':
+					neurons_in_row += ceil(populations[i]['neurons'] / NpN) * NpN
+				else:
+					neurons_in_row += populations[i]['neurons']
 
 			nodes_required = ceil(neurons_in_row / NpN)
 
-			Ny = ceil(nodes_required / self.size[1])
-			if i == len(populations) - 1:
-				Ny = self.size[1] - rows_filled
+			Ny = min(self.size[1] - rows_filled, ceil(nodes_required / self.size[1]))
 
 			# Generate path in which order nodes will be filled
 			y = rows_filled
 			dy = 1
 
-			for nodes_reserved in range(ceil((neurons_in_row - populations[i]['neurons']) / NpN)):
-				fill_path.append((x, y))
+			for _ in range(nodes_required):
+				if (x, y) not in fill_path or (x, y) == end_node:
+					fill_path.append((x, y))
 				if rows_filled <= y + dy < rows_filled + Ny:
 					y += dy
 				else:
@@ -1169,7 +1165,7 @@ class Mesh4(Network):
 			dy = 1
 
 			while y < rows_filled + Ny:
-				if (x, y) not in fill_path or (x, y) == end_node:
+				if (x, y) not in fill_path or ((x, y) == end_node and neuron_model != 'population'):
 					fill_path.append((x, y))
 				if x_lim[0] <= x + dx <= x_lim[1]:
 					x += dx
@@ -1178,7 +1174,7 @@ class Mesh4(Network):
 					dx = -dx
 
 			rows_filled += Ny
-			neurons_in_row = - (Ny * self.size[0] * NpN - neurons_in_row)
+			neurons_in_row = neurons_in_row - (Ny * self.size[0] * NpN)
 
 			if i == len(populations) - 1:
 				break
@@ -1186,12 +1182,12 @@ class Mesh4(Network):
 				i += 1
 
 		try:
+			current_node = fill_path.pop(0)
 			for j in range(len(populations)):
 				population_name = populations[j]['population']
 				neuron_counter = 0
 
 				while neuron_counter < populations[j]['neurons']:
-					current_node = fill_path[0]
 					mapped_to_node = sum([tally for tally, pop in self.nodes[current_node].neurons])
 					tally = min(populations[j]['neurons'] - neuron_counter, NpN - mapped_to_node)
 
@@ -1202,14 +1198,18 @@ class Mesh4(Network):
 					if round(neurons_placed / network_size * 1000) / 10 > ratio:
 						ratio = round(neurons_placed / network_size * 1000) / 10
 						print(
-							f'Mapping neurons to network, grouped per area\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
+							f'Mapping neurons to network, grouped per population\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
 
 					if mapped_to_node + tally == NpN:
-						fill_path.pop(0)
+						current_node = fill_path.pop(0)
 					elif mapped_to_node + tally > NpN:
 						raise Exception
-					elif j == i - 1:
-						fill_path.pop(0)
+
+				if neuron_model.lower() == 'population' and neurons_placed < network_size:
+					# Continue to the next node, even if the current one is not full yet, in case different neuron
+					# models per node are not allowed
+					current_node = fill_path.pop(0)
+
 		except IndexError:
 			sim_log.error(
 				f'All nodes have been filled.\n{neurons_placed} neurons have been placed, '
@@ -1219,7 +1219,7 @@ class Mesh4(Network):
 			f'Mapped {network_size} neurons to hardware in {convert_time(time.time() - T0)}.\n'
 			f'Hardware utilization: {round(network_size / (len(self.nodes) * NpN) * 1000) / 10}%\n')
 
-	def area_grouping(self, NpN, matrix, sort = True, **rest_args):
+	def area_grouping(self, NpN, matrix, sort = False, neuron_model = 'non', **_kwargs):
 		sim_log.message('Determining mapping of neurons... (Area Grouping)')
 
 		T0 = time.time()
@@ -1229,12 +1229,13 @@ class Mesh4(Network):
 		print(f'Mapping neurons to network, grouped per area\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
 
 		rows_filled = 0
-		areas, area_populations = extract_areas(matrix)
-		matrix_dict = {pop['population']: {'neurons': pop['neurons'], 'connectivity_prob': pop['connectivity_prob']} for
-					   pop in matrix}
+		areas_size_matrix, area_populations = extract_areas(matrix)
+		matrix_dict = {
+			pop['population']: {'neurons': pop['neurons'], 'connectivity_prob': pop['connectivity_prob']} for
+			pop in matrix}
 
 		if sort:
-			areas = sort_groups(areas)
+			areas_size_matrix = sort_groups(areas_size_matrix)
 
 		neurons_in_row = 0
 		x = 0
@@ -1242,34 +1243,49 @@ class Mesh4(Network):
 		i = 0
 		fill_path = []
 		while 1:
-			neurons_in_row += areas[i]['neurons']
+			if neuron_model == 'population':
+				for pop in area_populations[areas_size_matrix[i]['area']]:
+					neurons_in_row += ceil(matrix_dict[areas_size_matrix[i]['area'] + '-' + pop]['neurons'] / NpN) * NpN
+			elif neuron_model == 'area':
+				neurons_in_row += ceil(areas_size_matrix[i]['neurons'] / NpN) * NpN
+			else:
+				neurons_in_row += areas_size_matrix[i]['neurons']
 
-			width = sqrt(areas[i]['neurons'] / NpN)
+			width = sqrt(areas_size_matrix[i]['neurons'] / NpN)
 
-			while i < len(areas) - 1 and width + sqrt(areas[i + 1]['neurons'] / NpN) < self.size[0]:
-				# TODO: Make exceptions for final row, does it fit? just place them as squares, what to do otherwise?
+			while i < len(areas_size_matrix) - 1 and width + sqrt(areas_size_matrix[i + 1]['neurons'] / NpN) < self.size[0]:
 				i += 1
-				width += sqrt(areas[i]['neurons'] / NpN)
-				neurons_in_row += areas[i]['neurons']
+				width += sqrt(areas_size_matrix[i]['neurons'] / NpN)
+				if neuron_model == 'population':
+					for pop in area_populations[areas_size_matrix[i]['area']]:
+						neurons_in_row += ceil(matrix_dict[areas_size_matrix[i]['area'] + '-' + pop]['neurons'] / NpN) * NpN
+				elif neuron_model == 'area':
+					neurons_in_row += ceil(areas_size_matrix[i]['neurons'] / NpN) * NpN
+				else:
+					neurons_in_row += areas_size_matrix[i]['neurons']
 
 			nodes_required = ceil(neurons_in_row / NpN)
 
-			Ny = ceil(nodes_required / self.size[1])
-			if i == len(areas) - 1:
-				Ny = self.size[1] - rows_filled
+			Ny = min(self.size[1] - rows_filled, ceil(nodes_required / self.size[1]))
 
 			# Generate path in which order nodes will be filled
 			y = rows_filled
 			dy = 1
 
-			for nodes_reserved in range(ceil((neurons_in_row - areas[i]['neurons']) / NpN)):
+			# Move up and down through the reserved rows for all areas that fit entirely
+			for nodes_reserved in range(nodes_required):
 				fill_path.append((x, y))
 				if rows_filled <= y + dy < rows_filled + Ny:
 					y += dy
 				else:
 					x += dx
-					dy = -dy
+					if x == 0 or x == self.size[0] - 1:
+						y = rows_filled
+						dy = 1
+					else:
+						dy = -dy
 
+			# Set boundaries for final fill curve in the remaining empty space of the reserved rows
 			end_node = fill_path[-1]
 			if dx > 0:
 				x_lim = (fill_path[-1][0], self.size[0] - 1)
@@ -1284,8 +1300,9 @@ class Mesh4(Network):
 
 			dy = 1
 
+			# Move sideways through the remaining empty space of the reserved rows
 			while y < rows_filled + Ny:
-				if (x, y) not in fill_path or (x, y) == end_node:
+				if (x, y) not in fill_path or ((x, y) == end_node and neuron_model in ['area', 'non']):
 					fill_path.append((x, y))
 				if x_lim[0] <= x + dx <= x_lim[1]:
 					x += dx
@@ -1296,21 +1313,125 @@ class Mesh4(Network):
 			rows_filled += Ny
 			neurons_in_row = - (Ny * self.size[0] * NpN - neurons_in_row)
 
-			if i == len(areas) - 1:
+			if i == len(areas_size_matrix) - 1:
 				break
 			else:
 				i += 1
 
 		try:
-			for j in range(len(areas)):
-				area_name = areas[j]['area']
+			current_node = fill_path.pop(0)
+			for j in range(len(areas_size_matrix)):
+				area_name = areas_size_matrix[j]['area']
+				if neuron_model == 'population' and self.nodes[current_node].neurons \
+					or 	(neuron_model == 'area' and self.nodes[current_node].neurons[0][0].split('-')[0] != area_name):
+					current_node = fill_path.pop(0)
 				for population in area_populations[area_name]:
 					population_name = area_name + '-' + population
 					population_size = matrix_dict[population_name]['neurons']
 					neuron_counter = 0
 
 					while neuron_counter < population_size:
-						current_node = fill_path[0]
+						mapped_to_node = sum([tally for tally, pop in self.nodes[current_node].neurons])
+						tally = min(population_size - neuron_counter, NpN - mapped_to_node)
+						if tally != 0:
+							self.nodes[current_node].neurons.append((tally, population_name))
+							neuron_counter += tally
+							neurons_placed += tally
+
+							if round(neurons_placed / network_size * 1000) / 10 > ratio:
+								ratio = round(neurons_placed / network_size * 1000) / 10
+								print(
+									f'Mapping neurons to network, grouped per area\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
+
+						if mapped_to_node + tally == NpN:
+							current_node = fill_path.pop(0)
+						elif mapped_to_node + tally > NpN:
+							raise Exception
+
+					if neuron_model.lower() == 'population':
+						# Continue to the next node, even if the current one is not full yet, in case different neuron
+						# models per node are not allowed
+						if self.nodes[current_node].neurons and neurons_placed < network_size:
+							current_node = fill_path.pop(0)
+
+				if neuron_model.lower() == 'area' and neurons_placed < network_size:
+					# Continue to the next node, even if the current one is not full yet, in case different neuron
+					# models per node are not allowed
+					current_node = fill_path.pop(0)
+
+		except IndexError:
+			sim_log.error(
+				f'All nodes have been filled.\n{neurons_placed} neurons have been placed, '
+				f'{network_size - neurons_placed} have not.')
+
+		sim_log.message(
+			f'Mapped {network_size} neurons to hardware in {convert_time(time.time() - T0)}.\n'
+			f'Hardware utilization: {round(network_size / (len(self.nodes) * NpN) * 1000) / 10}%\n')
+
+	def space_filling_curve(self, NpN, matrix, sort = False, neuron_model = 'population', **_kwargs):
+		# Fill the network nodes following a Space filling curve
+		# To get a better understanding of how the Hilbert-curve is created,
+		# take a look at https://en.wikipedia.org/wiki/Hilbert_curve
+		# Iin this method, the general approach is altered to work with non power of 2 network dimensions
+		sim_log.message('Determining mapping of neurons... (following a surface filling curve)')
+
+		T0 = time.time()
+		if (self.size[0] - self.size[1]) ** 2 > 1:
+			sim_log.error('Space filling curve mapping only works in square networks with Nx = Ny, not rectangles...')
+			raise sim_log.MappingError
+
+		sub_sections = [('A', (0, 0), (self.size[0] - 1, self.size[0] - 1))]
+		fill_path = []
+		print(f'Calculating surface filling curve...', end='\r')
+
+		while sub_sections:
+			current_section = sub_sections.pop(0)
+			section_size = (current_section[2][0] - current_section[1][0] + 1, current_section[2][1] - current_section[1][1] + 1)
+
+			if section_size == (2, 2):
+				curve = [(0, 1), (1, 0), (0, -1)]
+				fill_path += self.append_curve(curve, current_section[0], current_section[1], current_section[2])
+
+			elif section_size == (3, 2) or section_size == (2, 3):
+				curve = [(0, 1), (0, 1), (1, 0), (0, -1), (0, -1)]
+				fill_path += self.append_curve(curve, current_section[0], current_section[1], current_section[2])
+
+			elif section_size == (3, 3):
+				curve = [(1, 0), (0, 1), (-1, 0), (0, 1), (1, 0), (1, 0), (0, -1), (0, -1)]
+				fill_path += self.append_curve(curve, current_section[0], current_section[1], current_section[2])
+
+			elif section_size == (4, 3) or section_size == (3, 4):
+				curve = [(1, 0), (0, 1), (-1, 0), (0, 1), (1, 0), (1, 0), (1, 0), (0, -1), (-1, 0), (0, -1), (1, 0)]
+				fill_path += self.append_curve(curve, current_section[0], current_section[1], current_section[2])
+
+			else:
+				# Divide current section into four smaller sections and add them to begin of the sub_section list
+				sub_sections = self.hilbert_curve_conversion(current_section) + sub_sections
+
+		if '-' in matrix[0]['population']:
+			areas_size_matrix, area_populations = extract_areas(matrix)
+			matrix_dict = {
+				pop['population']: {'neurons': pop['neurons'], 'connectivity_prob': pop['connectivity_prob']} for
+				pop in matrix}
+
+		if sort:
+			areas_size_matrix = sort_groups(areas_size_matrix)
+
+		network_size = sum([population["neurons"] for population in matrix])
+		ratio = 0
+		neurons_placed = 0
+		print(f'Mapping neurons to network, following a surface filling curve\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
+
+		try:
+			current_node = fill_path.pop(0)
+			for j in range(len(areas_size_matrix)):
+				area_name = areas_size_matrix[j]['area']
+				for population in area_populations[area_name]:
+					population_name = area_name + '-' + population
+					population_size = matrix_dict[population_name]['neurons']
+					neuron_counter = 0
+
+					while neuron_counter < population_size:
 						mapped_to_node = sum([tally for tally, pop in self.nodes[current_node].neurons])
 						tally = min(population_size - neuron_counter, NpN - mapped_to_node)
 
@@ -1321,14 +1442,24 @@ class Mesh4(Network):
 						if round(neurons_placed / network_size * 1000) / 10 > ratio:
 							ratio = round(neurons_placed / network_size * 1000) / 10
 							print(
-								f'Mapping neurons to network, grouped per area\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
+								f'Mapping neurons to network, following a surface filling curve\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
 
 						if mapped_to_node + tally == NpN:
-							fill_path.pop(0)
+							current_node = fill_path.pop(0)
 						elif mapped_to_node + tally > NpN:
-							raise Exception
-						elif j == i - 1:
-							fill_path.pop(0)
+							raise sim_log.MappingError
+
+					if neuron_model.lower() == 'population' and neurons_placed < network_size:
+						# Continue to the next node, even if the current one is not full yet, in case different neuron
+						# models per node are not allowed
+						if self.nodes[current_node].neurons and neurons_placed < network_size:
+							current_node = fill_path.pop(0)
+
+				if neuron_model.lower() == 'area' and neurons_placed < network_size:
+					# Continue to the next node, even if the current one is not full yet, in case different neuron
+					# models per node are not allowed
+					current_node = fill_path.pop(0)
+
 		except IndexError:
 			sim_log.error(
 				f'All nodes have been filled.\n{neurons_placed} neurons have been placed, '
@@ -1338,11 +1469,116 @@ class Mesh4(Network):
 			f'Mapped {network_size} neurons to hardware in {convert_time(time.time() - T0)}.\n'
 			f'Hardware utilization: {round(network_size / (len(self.nodes) * NpN) * 1000) / 10}%\n')
 
+	# Mapping Sub-methods
 	def distance(self, node_A, node_B):
-		# Calculates the distance between two nodes, The euclidean distance in this case
 		deltas = self.delta(node_A, node_B)
-		distance = (deltas[0]**2 + deltas[1]**2)**(1 / 2)
-		return distance
+		return abs(deltas[0]) + abs(deltas[1]) + abs(deltas[2]) + abs(deltas[3])
+
+	@staticmethod
+	def hilbert_curve_conversion(subsection):
+		area_type = subsection[0]
+		LL_corner, UR_corner = subsection[1], subsection[2]
+
+		split_hor = (UR_corner[0] - LL_corner[0] + 1) / 2
+		split_ver = (UR_corner[1] - LL_corner[1] + 1) / 2
+
+		if area_type == 'A':
+			if (UR_corner[0] - LL_corner[0] + 1) % 2:
+				split_hor = int(LL_corner[0] + 2 * round(split_hor / 2))
+			else:
+				split_hor = int(LL_corner[0] + split_hor)
+			if (UR_corner[1] - LL_corner[1] + 1) % 2:
+				split_ver = int(LL_corner[1] + 2 * round(split_ver / 2))
+			else:
+				split_ver = int(LL_corner[1] + split_ver)
+
+			division = [
+				('D', LL_corner, (split_hor - 1, split_ver - 1)),
+				('A', (LL_corner[0], split_ver), (split_hor - 1, UR_corner[1])),
+				('A', (split_hor, split_ver), UR_corner),
+				('B', (split_hor, LL_corner[1]), (UR_corner[0], split_ver - 1))]
+			return division
+		elif area_type == 'B':
+			if (UR_corner[0] - LL_corner[0] + 1) % 2:
+				split_hor = int(LL_corner[0] + 2 * round(split_hor / 2 - 0.5) + 1)
+			else:
+				split_hor = int(LL_corner[0] + split_hor)
+			if (UR_corner[1] - LL_corner[1] + 1) % 2:
+				split_ver = int(LL_corner[1] + 2 * round(split_ver / 2 - 0.5) + 1)
+			else:
+				split_ver = int(LL_corner[1] + split_ver)
+			division = [
+				('C', (split_hor, split_ver), UR_corner),
+				('B', (LL_corner[0], split_ver), (split_hor - 1, UR_corner[1])),
+				('B', LL_corner, (split_hor - 1, split_ver - 1)),
+				('A', (split_hor, LL_corner[1]), (UR_corner[0], split_ver - 1))]
+			return division
+		elif area_type == 'C':
+			if (UR_corner[0] - LL_corner[0] + 1) % 2:
+				split_hor = int(LL_corner[0] + 2 * round(split_hor / 2 - 0.5) + 1)
+			else:
+				split_hor = int(LL_corner[0] + split_hor)
+			if (UR_corner[1] - LL_corner[1] + 1) % 2:
+				split_ver = int(LL_corner[1] + 2 * round(split_ver / 2 - 0.5) + 1)
+			else:
+				split_ver = int(LL_corner[1] + split_ver)
+
+			division = [
+				('B', (split_hor, split_ver), UR_corner),
+				('C', (split_hor, LL_corner[1]), (UR_corner[0], split_ver - 1)),
+				('C', LL_corner, (split_hor - 1, split_ver - 1)),
+				('D', (LL_corner[0], split_ver), (split_hor - 1, UR_corner[1]))]
+			return division
+		else:  # area_type == 'D'
+			if (UR_corner[0] - LL_corner[0] + 1) % 2:
+				split_hor = int(LL_corner[0] + 2 * round(split_hor / 2))
+			else:
+				split_hor = int(LL_corner[0] + split_hor)
+			if (UR_corner[1] - LL_corner[1] + 1) % 2:
+				split_ver = int(LL_corner[1] + 2 * round(split_ver / 2))
+			else:
+				split_ver = int(LL_corner[1] + split_ver)
+
+			division = [
+				('A', LL_corner, (split_hor - 1, split_ver - 1)),
+				('D', (split_hor, LL_corner[1]), (UR_corner[0], split_ver - 1)),
+				('D', (split_hor, split_ver), UR_corner),
+				('C', (LL_corner[0], split_ver), (split_hor - 1, UR_corner[1]))]
+			return division
+
+	@staticmethod
+	def append_curve(curve, section_type, lower_left, upper_right):
+		path = []
+		if section_type == 'A':
+			x, y = lower_left
+			path.append((x, y))
+			for dx, dy in curve:
+				x += dx
+				y += dy
+				path.append((x, y))
+		elif section_type == 'B':
+			x, y = upper_right
+			path.append((x, y))
+			for dy, dx in curve:
+				x -= dx
+				y -= dy
+				path.append((x, y))
+		elif section_type == 'C':
+			x, y = upper_right
+			path.append((x, y))
+			for dx, dy in curve:
+				x -= dx
+				y -= dy
+				path.append((x, y))
+		else:  # section_type == 'D'
+			x, y = lower_left
+			path.append((x, y))
+			for dy, dx in curve:
+				x += dx
+				y += dy
+				path.append((x, y))
+
+		return path
 
 
 class Mesh6(Mesh4):
@@ -1353,11 +1589,9 @@ class Mesh6(Mesh4):
 		self.create_network(size)
 		self.type = 'Mesh6'
 
-	"""
-	================
-	Building methods
-	================
-	"""
+	####################################################################################################################
+	# Construction Methods
+	####################################################################################################################
 	def connect_in_grid(self, node, length = 1):
 		Mesh4.connect_in_grid(self, node, length)
 		x_coord, y_coord = node
@@ -1371,73 +1605,16 @@ class Mesh6(Mesh4):
 		elif self.torus:
 			self.add_edge(node, ((x_coord - length) % self.size[0], (y_coord - length) % self.size[1]), length)
 
-	"""
-	================
-	Routing methods
-	================
-	Top-level
-	"""
-	def longest_dimension_first_routing(self, source, destinations):
-		distance = {source: t_router}
-		path = {source: 'source'}
-
-		for destination in destinations:
-			if destination in path:
-				# Destination has already been visited during a prior calculation, continue to next destination
-				continue
-			else:
-				current_node = source
-
-			delta_x, delta_y, delta_w = self.delta(source, destination)
-			deltas = {
-				'x': delta_x,
-				'y': delta_y,
-				'w': delta_w
-			}
-
-			while deltas:
-				temp = {key: abs(item) for key, item in deltas.items()}
-				direction = max(temp, key=temp.get)
-				delta = deltas[direction]
-
-				if direction == 'w':
-					x, y = True, True
-				else:
-					x, y = direction == 'x', direction == 'y'
-
-				while delta:
-					next_node = \
-						((current_node[0] + sign(delta) * x) % self.size[0],
-						 (current_node[1] + sign(delta) * y) % self.size[1])
-					if next_node not in self.nodes:
-						sim_log.error(
-							f'While routing from {source} to {destination}, '
-							f'ldfr-routing calculated the next node: {next_node}, but this node does not exist.')
-						raise sim_log.RoutingError()
-					elif next_node not in self.nodes[current_node].edges:
-						sim_log.error(
-							f'While routing from {source} to {destination}, '
-							f'ldfr-routing tried to go from {current_node} to {next_node}, but no connection exists between these nodes.')
-						raise sim_log.RoutingError()
-					else:
-						path[next_node] = current_node
-						distance[next_node] = \
-							distance[current_node] + t_router + self.nodes[current_node].edges[
-								next_node].weight * t_link
-						current_node = next_node
-						delta -= sign(delta)
-
-				del deltas[direction]
-
-		return path, distance
-
+	####################################################################################################################
+	# Routing Methods
+	####################################################################################################################
 	# Routing Sub-methods
 	def delta(self, source, destination):
-		delta_x, delta_y = Mesh4.delta(self, source, destination)
+		delta_x, delta_y, _, _ = Mesh4.delta(self, source, destination)
 
 		if delta_x * delta_y >= 0:  # Upper right or lower left quadrant
 			delta_w = min((delta_x, delta_y), key=abs)
-			return [delta_x - delta_w, delta_y - delta_w, delta_w]
+			return [delta_x - delta_w, delta_y - delta_w, delta_w, 0]
 
 		elif self.torus and \
 			abs(delta_x) + abs(delta_y) > min(self.size[0] - abs(delta_x), self.size[1] - abs(delta_y)):
@@ -1448,9 +1625,9 @@ class Mesh6(Mesh4):
 
 			delta_w = min((delta_x, delta_y), key=abs)
 
-			return [delta_x - delta_w, delta_y - delta_w, delta_w]
+			return [delta_x - delta_w, delta_y - delta_w, delta_w, 0]
 		else:
-			return [delta_x, delta_y, 0]
+			return [delta_x, delta_y, 0, 0]
 
 	def distance(self, node_A, node_B):
 		# Calculates the distance between two nodes, The euclidean distance in this case
@@ -1477,6 +1654,9 @@ class SpiNNaker(Mesh6):
 			self.create_network(nr_boards, board_connectors)
 			self.size = [(nr_boards * 48)**(1 / 2), (nr_boards * 48)**(1 / 2)]
 
+	####################################################################################################################
+	# Construction Methods
+	####################################################################################################################
 	def create_board(self):
 		T0 = time.time()
 		for y in range(8):
@@ -1580,6 +1760,9 @@ class SpiNNaker(Mesh6):
 		sim_log.message('\tOuter nodes are connected to opposite sides the hexagon grid to form a torus.')
 		sim_log.message(f'\tGraph generated in: {convert_time(time.time() - T0)}')
 
+	####################################################################################################################
+	# Factory Methods
+	####################################################################################################################
 	def routing_algorithm(self, routing_type):
 		if not routing_type == 'espr':
 			if routing_type == 'dor':
@@ -1601,18 +1784,15 @@ class SpiNNaker(Mesh6):
 			return self.random_placement
 		elif mapping_type.lower() == 'sequentially':
 			return self.sequential_placement
-		elif mapping_type.lower() == 'manual':
-			return self.MANUAL
-		elif mapping_type.lower() == 'pacman':
-			return self.PACMAN
-		elif mapping_type.lower() == 'ghost':
-			return self.GHOST
 		else:
 			sim_log.error(
 				f'Given mapping algorithm {mapping_type} is not recognized or implemented. '
 				f'Continue with next iteration.')
 			raise sim_log.MappingError
 
+	####################################################################################################################
+	# Routing Methods
+	####################################################################################################################
 	@staticmethod
 	def delta_singleboard(source, destination):
 		delta_x, delta_y = destination[0] - source[0], destination[1] - source[1]
@@ -1623,7 +1803,6 @@ class SpiNNaker(Mesh6):
 		else:
 			delta = [delta_x, delta_y, 0]
 
-		return delta
 		if sum([abs(i) for i in delta]) <= 4:
 			return delta
 		else:
@@ -1724,6 +1903,8 @@ class SpiNNaker(Mesh6):
 
 		return path, distance
 
+	# This method is unreachable and has to be added to the routing algorithm factory method to be used.
+	# Routes either diagonally -> horizontally, horizontally -> vertically or vertically -> diagonally
 	def windmill_routing(self, source, destinations):
 		distance = {source: t_router}
 		path = {source: 'source'}
@@ -1870,1036 +2051,6 @@ class SpiNNaker(Mesh6):
 
 		return path, distance
 
-	"""
-	================
-	Mapping Algorithms
-	================
-	"""
-	def MANUAL(self, netlist, NpN, **rest_args):
-		sim_log.message('Mapping neurons... (MANUAL Benchmark)')
-		T0 = time.time()
-		nr_neurons = len(netlist)
-		ratio = 0
-		neurons_placed = 0
-		print(f'Mapping neurons to network\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
-		Nodes = list(self.nodes.keys())
-		try:
-			i = 0
-			node = Nodes[0]
-			for neuron in netlist:
-				if neuron.startswith('L2/3E'):
-					node = (2, 3)
-					if len(self.nodes[node].neurons) < 1034:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled with {len(self.nodes[node].neurons)} neurons.\nNeuron {neuron} cannot be placed.')
-
-						print(self.nodes[node].neurons)
-						raise sim_log.MappingError()
-				elif neuron.startswith('L2/3I'):
-					node = (3, 3)
-					if len(self.nodes[node].neurons) < 291:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('L4E'):
-					node = (3, 4)
-					if len(self.nodes[node].neurons) < 1095:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('L4I'):
-					node = (4, 3)
-					if len(self.nodes[node].neurons) < 273:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('L5E'):
-					node = (4, 4)
-					if len(self.nodes[node].neurons) < 242:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('L5I'):
-					node = (3, 2)
-					if len(self.nodes[node].neurons) < 53:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('L6E'):
-					node = (4, 2)
-					if len(self.nodes[node].neurons) < 719:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('L6I'):
-					node = (5, 2)
-					if len(self.nodes[node].neurons) < 147:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-
-				elif neuron.startswith('SRC_L2/3E'):
-					node = (2, 1)
-					if len(self.nodes[node].neurons) < 1034:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L2/3I'):
-					node = (1, 1)
-					if len(self.nodes[node].neurons) < 291:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L4E'):
-					node = (3, 5)
-					if len(self.nodes[node].neurons) < 1095:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L4I'):
-					node = (5, 4)
-					if len(self.nodes[node].neurons) < 273:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L5E'):
-					node = (5, 5)
-					if len(self.nodes[node].neurons) < 242:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L5I'):
-					node = (1, 2)
-					if len(self.nodes[node].neurons) < 53:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L6E'):
-					node = (4, 1)
-					if len(self.nodes[node].neurons) < 719:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L6I'):
-					node = (5, 1)
-					if len(self.nodes[node].neurons) < 147:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-
-				elif neuron.startswith('DE_L2/3E'):
-					node = (1, 0)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('DE_L2/3I'):
-					node = (0, 0)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('DE_L4E'):
-					node = (1, 0)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('DE_L4I'):
-					node = (0, 0)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('DE_L5E'):
-					node = (1, 0)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('DE_L5I'):
-					node = (0, 0)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('DE_L6E'):
-					node = (1, 0)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('DE_L6I'):
-					node = (1, 0)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-
-				else:
-					sim_log.error(
-						f'Neuron {neuron} was not recognized within the MANUAL mapping.')
-					raise sim_log.MappingError()
-
-				if round(neurons_placed / nr_neurons * 1000) / 10 > ratio:
-					ratio = round(neurons_placed / nr_neurons * 1000) / 10
-					print(
-						f'Mapping neurons to network\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
-
-		except IndexError:
-			sim_log.error(
-				f'All nodes have been filled.\n{neurons_placed} neurons have been placed, '
-				f'{len(netlist) - neurons_placed} have not.')
-			raise sim_log.MappingError()
-
-		sim_log.message(
-			f'Mapped {len(netlist)} neurons to hardware in {convert_time(time.time() - T0)}.\n'
-			f'Hardware utilization: {round(len(netlist) / (len(self.nodes) * NpN) * 1000) / 10}%\n')
-
-	def PACMAN(self, netlist, NpN, **rest_args):
-		sim_log.message('Mapping neurons... (PACMAN)')
-		T0 = time.time()
-		nr_neurons = len(netlist)
-		ratio = 0
-		neurons_placed = 0
-		print(f'Mapping neurons to network\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
-		Nodes = list(self.nodes.keys())
-		try:
-			for neuron in netlist:
-				if neuron.startswith('L2/3E'):
-					if int(neuron[6:]) < 400:
-						node = (1, 0)
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						node = (1, 1)
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-				elif neuron.startswith('L2/3I'):
-					node = (1, 0)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('L4E'):
-					if int(neuron[4:]) < 300:
-						node = (0, 1)
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						node = (2, 0)
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-				elif neuron.startswith('L4I'):
-					node = (0, 1)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('L5E'):
-					node = (0, 1)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('L5I'):
-					node = (1, 1)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('L6E'):
-					if int(neuron[4:]) < 700:
-						node = (0, 0)
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						node = (1, 0)
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-				elif neuron.startswith('L6I'):
-					node = (0, 0)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-
-				elif neuron.startswith('SRC_L2/3E'):
-					if int(neuron[10:]) < 400:
-						node = (2, 1)
-						if len(self.nodes[node].neurons) < 1557:
-							netlist[neuron].update({'location': node})
-							self.nodes[node].neurons.append(neuron)
-							neurons_placed += 1
-						else:
-							sim_log.error(
-								f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-							raise sim_log.MappingError()
-					else:
-						node = (2, 2)
-						if len(self.nodes[node].neurons) < 1502:
-							netlist[neuron].update({'location': node})
-							self.nodes[node].neurons.append(neuron)
-							neurons_placed += 1
-						else:
-							sim_log.error(
-								f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-							raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L2/3I'):
-					node = (2, 1)
-					if len(self.nodes[node].neurons) < 1557:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L4E'):
-					if int(neuron[8:]) < 300:
-						node = (2, 2)
-						if len(self.nodes[node].neurons) < 1557:
-							netlist[neuron].update({'location': node})
-							self.nodes[node].neurons.append(neuron)
-							neurons_placed += 1
-						else:
-							sim_log.error(
-								f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-							raise sim_log.MappingError()
-					else:
-						node = (1, 2)
-						if len(self.nodes[node].neurons) < 795:
-							netlist[neuron].update({'location': node})
-							self.nodes[node].neurons.append(neuron)
-							neurons_placed += 1
-						else:
-							sim_log.error(
-								f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-							raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L4I'):
-					node = (2, 2)
-					if len(self.nodes[node].neurons) < 1502:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L5E'):
-					node = (2, 2)
-					if len(self.nodes[node].neurons) < 1502:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L5I'):
-					node = (2, 2)
-					if len(self.nodes[node].neurons) < 1502:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L6E'):
-					node = (2, 1)
-					if len(self.nodes[node].neurons) < 1557:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L6I'):
-					node = (2, 1)
-					if len(self.nodes[node].neurons) < 1557:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-
-				elif neuron.startswith('DE_L2/3E'):
-					if int(neuron[9:]) < 400:
-						node = (1, 0)
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						node = (1, 1)
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-				elif neuron.startswith('DE_L2/3I'):
-					node = (1, 0)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('DE_L4E'):
-					if int(neuron[7:]) < 300:
-						node = (0, 1)
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						node = (2, 0)
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-				elif neuron.startswith('DE_L4I'):
-					node = (0, 1)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('DE_L5E'):
-					node = (0, 1)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('DE_L5I'):
-					node = (1, 1)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('DE_L6E'):
-					if int(neuron[7:]) < 700:
-						node = (0, 0)
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						node = (1, 0)
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-				elif neuron.startswith('DE_L6I'):
-					node = (0, 0)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-
-				else:
-					sim_log.error(
-						f'Neuron {neuron} was not recognized within GHOST mapping.')
-					raise sim_log.MappingError()
-
-				if round(neurons_placed / nr_neurons * 1000) / 10 > ratio:
-					ratio = round(neurons_placed / nr_neurons * 1000) / 10
-					print(
-						f'Mapping neurons to network\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
-
-		except IndexError:
-			sim_log.error(
-				f'All nodes have been filled.\n{neurons_placed} neurons have been placed, '
-				f'{len(netlist) - neurons_placed} have not.')
-			raise sim_log.MappingError()
-
-		sim_log.message(
-			f'Mapped {len(netlist)} neurons to hardware in {convert_time(time.time() - T0)}.\n'
-			f'Hardware utilization: {round(len(netlist) / (len(self.nodes) * NpN) * 1000) / 10}%\n')
-
-	def GHOST(self, netlist, NpN, **rest_args):
-		# Mapping not 100% accurately replicated
-
-		sim_log.message('Mapping neurons... (GHOST Benchmark)')
-		T0 = time.time()
-		nr_neurons = len(netlist)
-		ratio = 0
-		neurons_placed = 0
-		print(f'Mapping neurons to network\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
-		try:
-			for neuron in netlist:
-				if neuron.startswith('L2/3E'):
-					if int(neuron[6:]) < 188:
-						node = (0, 1)
-					elif int(neuron[6:]) < 282:
-						node = (1, 1)
-					elif int(neuron[6:]) < 564:
-						node = (1, 3)
-					else:
-						node = (2, 3)
-					if len(self.nodes[node].neurons) < 1600:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('L2/3I'):
-					node = (1, 1)
-					if int(neuron[6:]) < 194:
-						node = (1, 0)
-					else:
-						node = (1, 1)
-					if len(self.nodes[node].neurons) < 1600:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('L4E'):
-					if int(neuron[4:]) < 199:
-						node = (0, 1)
-					elif int(neuron[4:]) < 298:
-						node = (1, 1)
-					elif int(neuron[4:]) < 798:
-						node = (1, 2)
-					elif int(neuron[4:]) < 897:
-						node = (1, 3)
-					else:
-						node = (2, 1)
-					if len(self.nodes[node].neurons) < 1600:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('L4I'):
-					node = (1, 0)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('L5E'):
-					if int(neuron[4:]) < 80:
-						node = (0, 1)
-					else:
-						node = (1, 1)
-					if len(self.nodes[node].neurons) < 1600:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('L5I'):
-					node = (1, 3)
-					if len(self.nodes[node].neurons) < 1600:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('L6E'):
-					if int(neuron[4:]) < 269:
-						node = (2, 1)
-					else:
-						node = (2, 2)
-					if len(self.nodes[node].neurons) < 1600:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('L6I'):
-					node = (0, 2)
-					if len(self.nodes[node].neurons) < 1600:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-
-				elif neuron.startswith('SRC_L2/3E'):
-					if int(neuron[10:]) < 188:
-						node = (0, 1)
-					elif int(neuron[10:]) < 282:
-						node = (1, 1)
-					elif int(neuron[10:]) < 564:
-						node = (1, 3)
-					else:
-						node = (2, 3)
-					if len(self.nodes[node].neurons) < 1600:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L2/3I'):
-					if int(neuron[10:]) < 194:
-						node = (1, 0)
-					else:
-						node = (1, 1)
-					if len(self.nodes[node].neurons) < 1600:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L4E'):
-					if int(neuron[8:]) < 199:
-						node = (0, 1)
-					elif int(neuron[8:]) < 298:
-						node = (1, 1)
-					elif int(neuron[8:]) < 798:
-						node = (1, 2)
-					elif int(neuron[8:]) < 897:
-						node = (1, 3)
-					else:
-						node = (2, 1)
-					if len(self.nodes[node].neurons) < 1600:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L4I'):
-					node = (1, 0)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('SRC_L5E'):
-					if int(neuron[8:]) < 80:
-						node = (0, 1)
-					else:
-						node = (1, 1)
-					if len(self.nodes[node].neurons) < 1600:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L5I'):
-					node = (1, 3)
-					if len(self.nodes[node].neurons) < 1600:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L6E'):
-					if int(neuron[8:]) < 269:
-						node = (2, 1)
-					else:
-						node = (2, 2)
-					if len(self.nodes[node].neurons) < 1600:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-				elif neuron.startswith('SRC_L6I'):
-					node = (0, 2)
-					if len(self.nodes[node].neurons) < 1600:
-						netlist[neuron].update({'location': node})
-						self.nodes[node].neurons.append(neuron)
-						neurons_placed += 1
-					else:
-						sim_log.error(
-							f'Node {node} has been filled.\nNeuron {neuron} cannot be placed.')
-						raise sim_log.MappingError()
-
-				elif neuron.startswith('DE_L2/3E'):
-					if int(neuron[9:]) < 188:
-						node = (0, 1)
-					elif int(neuron[9:]) < 282:
-						node = (1, 1)
-					elif int(neuron[9:]) < 564:
-						node = (1, 3)
-					else:
-						node = (2, 3)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('DE_L2/3I'):
-					if int(neuron[9:]) < 194:
-						node = (1, 0)
-					else:
-						node = (1, 1)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('DE_L4E'):
-					if int(neuron[7:]) < 199:
-						node = (0, 1)
-					elif int(neuron[7:]) < 298:
-						node = (1, 1)
-					elif int(neuron[7:]) < 798:
-						node = (1, 2)
-					elif int(neuron[7:]) < 897:
-						node = (1, 3)
-					else:
-						node = (2, 1)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('DE_L4I'):
-					node = (1, 0)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('DE_L5E'):
-					if int(neuron[7:]) < 80:
-						node = (0, 1)
-					else:
-						node = (1, 1)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('DE_L5I'):
-					node = (1, 3)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('DE_L6E'):
-					if int(neuron[7:]) < 269:
-						node = (2, 1)
-					else:
-						node = (2, 2)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-				elif neuron.startswith('DE_L6I'):
-					node = (0, 2)
-					netlist[neuron].update({'location': node})
-					self.nodes[node].neurons.append(neuron)
-					neurons_placed += 1
-
-				else:
-					sim_log.error(
-						f'Neuron {neuron} was not recognized within the MANUAL mapping.')
-					raise sim_log.MappingError()
-
-				if round(neurons_placed / nr_neurons * 1000) / 10 > ratio:
-					ratio = round(neurons_placed / nr_neurons * 1000) / 10
-					print(
-						f'Mapping neurons to network\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
-
-		except IndexError:
-			sim_log.error(
-				f'All nodes have been filled.\n{neurons_placed} neurons have been placed, '
-				f'{len(netlist) - neurons_placed} have not.')
-			raise sim_log.MappingError()
-
-		sim_log.message(
-			f'Mapped {len(netlist)} neurons to hardware in {convert_time(time.time() - T0)}.\n'
-			f'Hardware utilization: {round(len(netlist) / (len(self.nodes) * NpN) * 1000) / 10}%\n')
-
-	# def Naive(self, netlist, NpN, **rest_args):
-
-	def overview_mapping_benchmark(self, run_name, mapping_type):
-		experimental_data = {
-			'PACMAN': {
-				(0, 0): {'external': '3\\,773\\,911', 'internal': '4\\,882'},
-				(0, 1): {'external': '2\\,630\\,277', 'internal': '12\\,729'},
-				(1, 0): {'external': '5\\,587\\,441', 'internal': '3\\,334'},
-				(1, 1): {'external': '4\\,424\\,623', 'internal': '2\\,412'},
-				(1, 2): {'external': '0', 'internal': '2 672 252'},
-				(2, 0): {'external': '2\\,692\\,613', 'internal': '9\\,471'},
-				(2, 1): {'external': '2\\,696\\,375', 'internal': '5\\,559\\,023'},
-				(2, 2): {'external': '2\\,672\\,252', 'internal': '4\\,397\\,319'},
-				'total': {'external': '24\\,477\\,492', 'internal': '12\\,661\\,422'},
-			},
-			'MANUAL': {
-				(0, 0): {'external': '3\\,456', 'internal': '4\\,351'},
-				(0, 1): {'external': '3\\,146', 'internal': '0'},
-				(1, 0): {'external': '8\\,232', 'internal': '9\\,129'},
-				(1, 1): {'external': '17\\,740', 'internal': '704\\,983'},
-				(1, 2): {'external': '18\\,001', 'internal': '161\\,580'},
-				(2, 0): {'external': '2\\,092', 'internal': '0'},
-				(2, 1): {'external': '15\\,040', 'internal': '2\\,647\\,850'},
-				(2, 2): {'external': '3\\,532\\,713', 'internal': '0'},
-				(2, 3): {'external': '2\\,675\\,945', 'internal': '878'},
-				(3, 0): {'external': '1\\,264', 'internal': '0'},
-				(3, 1): {'external': '828', 'internal': '0'},
-				(3, 2): {'external': '191\\,753', 'internal': '490'},
-				(3, 3): {'external': '727\\,444', 'internal': '1\\,047'},
-				(3, 4): {'external': '3\\,706\\,900', 'internal': '4\\,260'},
-				(3, 5): {'external': '0', 'internal': '3\\,681\\,697'},
-				(4, 1): {'external': '1\\,264', 'internal': '3\\,333\\,150'},
-				(4, 2): {'external': '3\\,364\\,249', 'internal': '828'},
-				(4, 3): {'external': '856\\,929', 'internal': '1\\,919'},
-				(4, 4): {'external': '800\\,847', 'internal': '2\\,040'},
-				(5, 1): {'external': '0', 'internal': '493\\,013'},
-				(5, 2): {'external': '520\\,765', 'internal': '1\\,264'},
-				(5, 3): {'external': '10\\,144', 'internal': '0'},
-				(5, 4): {'external': '6\\,300', 'internal': '830\\,338'},
-				(5, 5): {'external': '0', 'internal': '773\\,424'},
-				'total': {'external': '16\\,465\\,052', 'internal': '12\\,652\\,241'}
-			}
-		}
-
-		with open(f'{run_name} {mapping_type}', 'w') as file, open(f'{run_name} {mapping_type} LaTeX', 'w') as TexFile:
-			file.write(f'  Node |    External    Internal     Neurons | Description\n{60* "-"}\n')
-			TexFile.write(
-				'\\begin{table}\n'
-				'\t\\begin{tabular}{ r | r r r r r | l }\n'
-				'\t\t & \\multicolumn{2}{c}{External Packets} & \\multicolumn{2}{c}{Internal Packets} & Neurons & \\\\\n'
-				'\t\tNode & Simulated & Experimental & Simulated & Experimental & (SRC \& IF) & Description \\\\\n'
-				'\t\t\\hline\n')
-
-			tot_ext = 0
-			tot_int = 0
-			tot_n = 0
-			for x in range(8):
-				for y in range(8):
-					if (x, y) not in self.nodes.keys():
-						continue
-
-					neurons = self.nodes[(x, y)].neurons
-
-					if neurons:
-						populations = []
-						n_neurons = 0
-						for neuron in neurons:
-							if "DE" not in neuron:
-								n_neurons += 1
-							i = neuron.rindex('_')
-							if neuron[:i] not in populations:
-								if 'DE' not in neuron:
-									populations.append(neuron[:i])
-
-						if len(populations) == 1:
-							description = populations[0]
-						else:
-							description = f'{len(populations)} Populations'
-					elif self.nodes[(x, y)].int_packets_handled or self.nodes[(x, y)].ext_packets_handled:
-						description = 'Not Used'
-						n_neurons = 0
-					elif (x, y) in experimental_data[mapping_type]:
-						description = 'Not Used'
-						n_neurons = 0
-					else:
-						continue
-
-					tot_ext += self.nodes[(x, y)].ext_packets_handled
-					tot_int += self.nodes[(x, y)].int_packets_handled
-					tot_n += n_neurons
-					node = f'{x}, {y}'
-					node = f'{(6 - len(node)) * " "}{node}'
-					internal = str(int(self.nodes[(x, y)].int_packets_handled))
-					internal = f'{(12 - len(internal)) * " "}{internal}'
-					external = str(int(self.nodes[(x, y)].ext_packets_handled))
-					external = f'{(12 - len(external)) * " "}{external}'
-					n_neurons_node = sum([1 if 'DE' not in n else 0 for n in neurons])
-					file.write(
-						f'{node} |{external}{internal}{(12 - len(str(len(neurons)))) * " "}{n_neurons_node} | {description}\n')
-
-					description = description.replace("_", "\\_")
-
-					sim_ext = str(round(self.nodes[(x, y)].ext_packets_handled, 1))
-					sim_int = str(round(self.nodes[(x, y)].int_packets_handled, 1))
-					if len(sim_ext) > 8:
-						sim_ext = f'{sim_ext[:-8]}\\,{sim_ext[-8:-5]}\\,{sim_ext[-5:]}'
-					elif len(sim_ext) > 5:
-						sim_ext = f'{sim_ext[:-5]}\\,{sim_ext[-5:]}'
-
-					if len(sim_int) > 8:
-						sim_int = f'{sim_int[:-8]}\\,{sim_int[-8:-5]}\\,{sim_int[-5:]}'
-					elif len(sim_int) > 5:
-						sim_int = f'{sim_int[:-5]}\\,{sim_int[-5:]}'
-
-					TexFile.write(
-						f'\t\t({x}, {y}) & '
-						f'{sim_ext} & {experimental_data[mapping_type][(x, y)]["external"]} & '
-						f'{sim_int} & {experimental_data[mapping_type][(x, y)]["internal"]} & '
-						f'{n_neurons} & {description} \\\\\n'
-					)
-
-			tot_e = str(round(tot_ext, 1))
-			tot_i = str(round(tot_int, 1))
-
-			TexFile.write(
-				f'\t\t\\hline\n'
-				f'\t\t & & & & & & \\\\\n'
-				f'\t\tTotal & '
-				f'{tot_e[:2]}\\,{tot_e[2:5]}\\,{tot_e[5:]} & {experimental_data[mapping_type]["total"]["external"]} & '
-				f'{tot_i[:2]}\\,{tot_i[2:5]}\\,{tot_i[5:]} & {experimental_data[mapping_type]["total"]["internal"]} & {tot_n} & \\\\\n'
-				'\t\\end{tabular}\n'
-				'\t\\caption{Simulated communication traffic results for the test case mapped with the '
-				f'{mapping_type} procedure.'
-				'}\n'
-				'\t\\label{tab:'
-				f'{mapping_type}'
-				'}\n'
-				'\\end{table}'
-			)
-
-			file.write(
-				f'{64* "-"}\n Total |{(12 - len(str(int(tot_ext)))) * " "}{int(tot_ext)}{(12 - len(str(int(tot_int)))) * " "}{int(tot_int)}'
-				f'{(12 - len(str(tot_n))) * " "}{tot_n} |'
-				f'\n\nCaution, due to rounding, the totals might seem incorrect')
-
-	def overview_mapping_GHOST(self, run_name, mapping_type):
-		with open(f'{run_name} {mapping_type}', 'w') as file, open(f'{run_name} {mapping_type} LaTeX', 'w') as TexFile:
-			file.write(f'  Node |    External    Internal     Neurons  | Description\n{60* "-"}\n')
-			TexFile.write(
-				'\\begin{table}\n'
-				'\t\\begin{tabular}{ r | r r r | l }\n'
-				'\t\tNode & External Packets & Internal Packets & Neurons (SRC \& IF) & Description \\\\\n'
-				'\t\t\\hline\n')
-
-			tot_ext = 0
-			tot_int = 0
-			tot_n = 0
-			for x in range(8):
-				for y in range(8):
-					if (x, y) not in self.nodes.keys():
-						continue
-
-					neurons = self.nodes[(x, y)].neurons
-
-					if neurons:
-						populations = []
-						n_neurons = 0
-						for neuron in neurons:
-							if "DE" not in neuron:
-								n_neurons += 1
-							i = neuron.rindex('_')
-							if neuron[:i] not in populations:
-								if 'DE' not in neuron:
-									populations.append(neuron[:i])
-
-						if len(populations) == 1:
-							description = populations[0]
-						else:
-							description = f'{len(populations)} Populations'
-					elif self.nodes[(x, y)].int_packets_handled or self.nodes[(x, y)].ext_packets_handled:
-						description = 'Not Used'
-						n_neurons = 0
-					else:
-						continue
-
-					tot_ext += self.nodes[(x, y)].ext_packets_handled
-					tot_int += self.nodes[(x, y)].int_packets_handled
-					tot_n += len(neurons)
-					node = f'{x}, {y}'
-					node = f'{(6 - len(node)) * " "}{node}'
-					internal = str(int(self.nodes[(x, y)].int_packets_handled))
-					internal = f'{(12 - len(internal)) * " "}{internal}'
-					external = str(int(self.nodes[(x, y)].ext_packets_handled))
-					external = f'{(12 - len(external)) * " "}{external}'
-					n_neurons_node = sum([1 if 'DE' not in n else 0 for n in neurons])
-					file.write(
-						f'{node} |{external}{internal}{(12 - len(str(len(neurons)))) * " "}{n_neurons_node} | {description}\n')
-
-					description = description.replace("_", "\\_")
-
-					sim_ext = str(round(self.nodes[(x, y)].ext_packets_handled, 1))
-					sim_int = str(round(self.nodes[(x, y)].int_packets_handled, 1))
-					if len(sim_ext) > 8:
-						sim_ext = f'{sim_ext[:-8]}\\,{sim_ext[-8:-5]}\\,{sim_ext[-5:]}'
-					elif len(sim_ext) > 5:
-						sim_ext = f'{sim_ext[:-5]}\\,{sim_ext[-5:]}'
-
-					if len(sim_int) > 8:
-						sim_int = f'{sim_int[:-8]}\\,{sim_int[-8:-5]}\\,{sim_int[-5:]}'
-					elif len(sim_int) > 5:
-						sim_int = f'{sim_int[:-5]}\\,{sim_int[-5:]}'
-
-					TexFile.write(
-						f'\t\t({x}, {y}) & '
-						f'{sim_ext} & {sim_int} & {n_neurons} & {description} \\\\\n'
-					)
-
-			TexFile.write(
-				f'\t\t\\hline\n'
-				f'\t\t & & & & \\\\\n'
-				f'\t\tTotal & {str(round(tot_ext, 1))[:3]}\\,{str(round(tot_ext, 1))[3:]} & '
-				f'{str(round(tot_int, 1))[:2]}\\,{str(round(tot_int, 1))[2:5]}\\,{str(round(tot_int, 1))[5:]} & {tot_n} & \\\\\n'
-				'\t\\end{tabular}\n'
-				'\t\\caption{Simulated communication traffic results for the test case mapped with the '
-				f'{mapping_type} procedure.'
-				'}\n'
-				'\t\\label{tab:'
-				f'{mapping_type}'
-				'}\n'
-				'\\end{table}'
-			)
-
-			file.write(
-				f'{64* "-"}\n Total |{(12 - len(str(int(tot_ext)))) * " "}{int(tot_ext)}{(12 - len(str(int(tot_int)))) * " "}{int(tot_int)}'
-				f'{(12 - len(str(tot_n))) * " "}{tot_n} |'
-				f'\n\nCaution, due to rounding, the totals might seem incorrect')
-
 
 class BrainscaleS(Mesh4):
 	def __init__(self):
@@ -2909,6 +2060,9 @@ class BrainscaleS(Mesh4):
 		self.create_network()
 		self.type = 'BrainscaleS'
 
+	####################################################################################################################
+	# Construction Methods
+	####################################################################################################################
 	def create_network(self, size = None):
 		T0 = time.time()
 
@@ -2943,6 +2097,9 @@ class BrainscaleS(Mesh4):
 			if target_node in self.nodes:
 				self.add_edge(node, target_node)
 
+	####################################################################################################################
+	# Factory Methods
+	####################################################################################################################
 	def routing_algorithm(self, routing_type):
 		if not routing_type == 'dor':
 			sim_log.warning(f'{routing_type} unavailable. The BrainScaleS system uses a routing scheme similar to DOR.')
@@ -3015,6 +2172,9 @@ class TrueNorth(Mesh4):
 		self.create_network(size, chip_to_chip)
 		self.type = 'TrueNorth'
 
+	####################################################################################################################
+	# Construction Methods
+	####################################################################################################################
 	def create_network(self, size, chip_to_chip = 1):
 		T0 = time.time()
 		Mesh4.create_network(self, size)
@@ -3046,6 +2206,9 @@ class TrueNorth(Mesh4):
 						self.nodes[(int(x / 32) * 32, 64 * y)].edges[(int(x / 32) * 32, 64 * y - 1)]
 		sim_log.message(f'\tGraph generated in: {convert_time(time.time() - T0)}')
 
+	####################################################################################################################
+	# Factory Methods
+	####################################################################################################################
 	def routing_algorithm(self, routing_type):
 		if not routing_type == 'dor':
 			sim_log.warning(f'{routing_type} unavailable. The TrueNorth system uses the DOR routing scheme.')
@@ -3060,11 +2223,9 @@ class Mesh8(Mesh6):
 		self.create_network(size)
 		self.type = 'Mesh8'
 
-	"""
-	================
-	Building methods
-	================
-	"""
+	####################################################################################################################
+	# Construction Methods
+	####################################################################################################################
 	def connect_in_grid(self, node, length = 1):
 		x_coord, y_coord = node
 		Mesh6.connect_in_grid(self, node, length)
@@ -3078,75 +2239,13 @@ class Mesh8(Mesh6):
 		elif self.torus:
 			self.add_edge(node, ((x_coord - length) % self.size[0], (y_coord + length) % self.size[1]), length)
 
-	"""
-	================
-	Routing methods
-	================
-	Top-level
-	"""
-	def longest_dimension_first_routing(self, source, destinations):
-		distance = {source: t_router}
-		path = {source: 'source'}
-
-		for destination in destinations:
-			if destination in path:
-				# Destination has already been visited during a prior calculation, continue to next destination
-				continue
-			else:
-				current_node = source
-
-			delta_x, delta_y, delta_w, delta_v = self.delta(source, destination)
-			deltas = {
-				'x': delta_x,
-				'y': delta_y,
-				'w': delta_w,
-				'v': delta_v
-			}
-
-			while deltas:
-				temp = {key: abs(item) for key, item in deltas.items()}
-				direction = max(temp, key=temp.get)
-				delta = deltas[direction]
-
-				if direction == 'x':
-					x, y = 1, 0
-				elif direction == 'y':
-					x, y = 0, 1
-				elif direction == 'w':
-					x, y = 1, 1
-				else:
-					x, y = 1, -1
-
-				while delta:
-					next_node = \
-						((current_node[0] + sign(delta) * x) % self.size[0],
-						 (current_node[1] + sign(delta) * y) % self.size[1])
-					if next_node not in self.nodes:
-						sim_log.error(
-							f'While routing from {source} to {destination}, '
-							f'ldfr-routing calculated the next node: {next_node}, but this node does not exist.')
-						raise sim_log.RoutingError()
-					elif next_node not in self.nodes[current_node].edges:
-						sim_log.error(
-							f'While routing from {source} to {destination}, '
-							f'ldfr-routing tried to go from {current_node} to {next_node}, but no connection exists between these nodes.')
-						raise sim_log.RoutingError()
-					else:
-						path[next_node] = current_node
-						distance[next_node] = \
-							distance[current_node] + t_router + self.nodes[current_node].edges[
-								next_node].weight * t_link
-						current_node = next_node
-						delta -= sign(delta)
-
-				del deltas[direction]
-
-		return path, distance
-
-	# Routing Sub-methods
+	####################################################################################################################
+	# Routing Methods
+	####################################################################################################################
+	# Routing Sub-Methods
 	def delta(self, source, destination):
 		# Mesh4.delta returns relative movement (in square mesh) which already accounts for the torus shape, if set
-		delta_x, delta_y = Mesh4.delta(self, source, destination)
+		delta_x, delta_y, _, _ = Mesh4.delta(self, source, destination)
 
 		if delta_x * delta_y >= 0:  # Move Diagonally from bottom left to top right
 			delta_w = min((delta_x, delta_y), key=abs)
@@ -3173,11 +2272,9 @@ class MultiMesh(Mesh8):
 			sim_log.fatal_error('Mesh sizes for the multi mesh should be given in list form')
 		self.type = 'Multi-Mesh'
 
-	"""
-	================
-	Building methods
-	================
-	"""
+	####################################################################################################################
+	# Construction Methods
+	####################################################################################################################
 	def create_network(self, size, mesh8 = None, mesh6 = None, mesh4 = None):
 		sim_log.message(f'Create multi-mesh hardware graph:')
 		T0 = time.time()
@@ -3215,12 +2312,30 @@ class MultiMesh(Mesh8):
 		sim_log.message(f'\tConnected all nodes in the grid to a Mesh8 ({mesh8}) + Mesh6 ({mesh6}) + Mesh4 ({mesh4})')
 		sim_log.message(f'\tGraph generated in: {convert_time(time.time() - T0)}')
 
+	####################################################################################################################
+	# Factory Methods
+	####################################################################################################################
+	def routing_algorithm(self, routing_type):
+		if routing_type.lower() == 'dor':
+			return self.dimension_order_routing
+		elif routing_type.lower() == 'ldfr':
+			return self.longest_dimension_first_routing
+		elif routing_type.lower() == 'directionor' or routing_type.lower() == 'dmor':
+			return self.direction_order_routing
+		elif routing_type.lower() == 'ldirectionfr' or routing_type.lower() == 'ldm':
+			return self.longest_direction_first_routing
+		elif routing_type.lower() == 'spr' or routing_type.lower() == 'dijkstra':
+			return self.dijkstra
+		else:
+			sim_log.error(
+				f'Given routing algorithm {routing_type} is not recognized or implemented. '
+				f'Continue with next iteration.')
+			raise sim_log.RoutingError
+
+	####################################################################################################################
+	# Routing Methods
+	####################################################################################################################
 	"""
-	================
-	Routing methods
-	================
-	Top-level
-	
 	The following routing algorithms will not always return the shortest path to the destination,
 	this depends on the combination of mesh structures.
 	Each layer should at least be double the size of the previous one to prevent this.
@@ -3449,11 +2564,7 @@ class MultiMesh(Mesh8):
 				del mesh_size[0]
 		return path, distance
 
-	"""
-	================
-	Routing methods
-	================
-	"""
+	# Routing Sub-Methods
 	def calculate_steps_dimensional(self, source, destination):
 		x, y = source[0], source[1]
 		steps = [[], [], [], []]
@@ -3516,29 +2627,10 @@ class MultiMesh(Mesh8):
 					y += delta_travelled[1] + delta_travelled[2] - delta_travelled[3]
 		return steps
 
-	def routing_algorithm(self, routing_type):
-		if routing_type.lower() == 'dor':
-			return self.dimension_order_routing
-		elif routing_type.lower() == 'ldfr':
-			return self.longest_dimension_first_routing
-		elif routing_type.lower() == 'directionor' or routing_type.lower() == 'dmor':
-			return self.direction_order_routing
-		elif routing_type.lower() == 'ldirectionfr' or routing_type.lower() == 'ldm':
-			return self.longest_direction_first_routing
-		elif routing_type.lower() == 'spr' or routing_type.lower() == 'dijkstra':
-			return self.dijkstra
-		else:
-			sim_log.error(
-				f'Given routing algorithm {routing_type} is not recognized or implemented. '
-				f'Continue with next iteration.')
-			raise sim_log.RoutingError
-
-	"""
-	================
-	Casting methods
-	================
-	"""
-	def broadcastfirst_unicast(self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, **kargs):
+	####################################################################################################################
+	# Casting Methods
+	####################################################################################################################
+	def broadcastfirst_unicast(self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, **_kwargs):
 		routing_fnc = self.routing_algorithm(routing_type)
 		latency = {}
 		destinations = {}
@@ -3597,14 +2689,14 @@ class MultiMesh(Mesh8):
 		return Node_ID, occupied_links, number_of_spikes, latency
 
 	def broadcastfirst_local_multicast(
-		self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, **kargs):
+		self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, **_kwargs):
 		routing_fnc = self.routing_algorithm(routing_type)
 		latency = {}
 		destinations = {}
 		number_of_spikes = 0
 		destinations_node = {}
 
-		routes_pre_phase3, distances_to_hubs = self.broadcastfirst_prephase(Node_ID, routing_fnc)
+		routes_bc, distances_to_hubs, broadcast_destinations = self.broadcastfirst_prephase(Node_ID, routing_fnc)
 
 		# Determine destinations
 		if netlist:
@@ -3629,8 +2721,9 @@ class MultiMesh(Mesh8):
 				if matrix[population_index].get('FR', 1) == 0:
 					continue
 
+				probability_dict = self.destination_nodes_probabilities(population_index, matrix)
 				for i in range(tally):
-					destinations_neuron = self.destinations_nodes_matrix(population_index, matrix)
+					destinations_neuron = self.destination_nodes_matrix(probability_dict)
 
 					neuron_ID = f'{Node_ID}_{population}_{i}'
 					destinations_node[neuron_ID] = destinations_neuron
@@ -3646,7 +2739,7 @@ class MultiMesh(Mesh8):
 
 		occupied_links, routes_phase3, distances = \
 			self.broadcastfirst_postphase(
-				destinations_node, routes_pre_phase3, number_of_spikes, distances_to_hubs, routing_fnc)
+				broadcast_destinations, routes_bc, number_of_spikes, destinations_node, Node_ID, distances_to_hubs, routing_fnc)
 
 		for destination, firerate in destinations.items():
 			for link in routes_phase3[destination]:
@@ -3659,13 +2752,13 @@ class MultiMesh(Mesh8):
 
 		return Node_ID, occupied_links, number_of_spikes, latency
 
-	def broadcastfirst_multicast(self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, **kargs):
+	def broadcastfirst_multicast(self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, **_kwargs):
 		routing_fnc = self.routing_algorithm(routing_type)
 		latency = {}
 		destinations_node = {}
 		firing_rate = {}
 
-		routes_pre_phase3, distances_to_hubs = self.broadcastfirst_prephase(Node_ID, routing_fnc)
+		routes_bc, distances_to_hubs, broadcast_destinations = self.broadcastfirst_prephase(Node_ID, routing_fnc)
 
 		# Determine destinations
 		if netlist:
@@ -3685,14 +2778,13 @@ class MultiMesh(Mesh8):
 				population_index = populations.index(population)
 				if matrix[population_index].get('FR', 1) == 0:
 					continue
-				for i in range(tally):
-					destinations = self.destinations_nodes_matrix(population_index, matrix)
 
-					# Remove duplicate target nodes
-					destinations = list(set(destinations))
+				probability_dict = self.destination_nodes_probabilities(population_index, matrix)
+				for i in range(tally):
+					destinations_neuron = self.destination_nodes_matrix(probability_dict)
 
 					neuron_ID = f'{Node_ID}_{population}_{i}'
-					destinations_node[neuron_ID] = destinations
+					destinations_node[neuron_ID] = destinations_neuron
 					firing_rate[neuron_ID] = matrix[population_index].get('FR', 1)
 		else:
 			sim_log.error(
@@ -3704,7 +2796,7 @@ class MultiMesh(Mesh8):
 
 		occupied_links, routes_phase3, distances = \
 			self.broadcastfirst_postphase(
-				destinations_node, routes_pre_phase3, number_of_spikes, distances_to_hubs,  routing_fnc)
+				broadcast_destinations, routes_bc, number_of_spikes, destinations_node, Node_ID, distances_to_hubs, routing_fnc)
 
 		for neuron, destinations_neuron in destinations_node.items():
 			neuron_route = []
@@ -3723,6 +2815,7 @@ class MultiMesh(Mesh8):
 
 	def flood(
 		self, Node_ID, Node_object, routing_type, casting, netlist = None, matrix = None, flooding_routes = None):
+
 		routing_fnc = self.routing_algorithm(routing_type)
 		latency = {}
 		destinations_node = {}  # only store the hubs which cover at least one destination node
@@ -3748,15 +2841,14 @@ class MultiMesh(Mesh8):
 				population_index = populations.index(population)
 				if matrix[population_index].get('FR', 1) == 0:
 					continue
-				for i in range(tally):
-					destinations = self.destinations_nodes_matrix(population_index, matrix)
 
-					# Remove duplicate target nodes
-					destinations = list(set(destinations))
+				probability_dict = self.destination_nodes_probabilities(population_index, matrix)
+				for i in range(tally):
+					destinations_neuron = self.destination_nodes_matrix(probability_dict)
 
 					neuron_ID = f'{Node_ID}_{population}_{i}'
 					destinations_node[neuron_ID] = list(
-						set([self.closest_hub(Node_ID, destination) for destination in destinations]))
+						set([self.closest_hub(Node_ID, destination) for destination in destinations_neuron]))
 					firing_rate[neuron_ID] = matrix[population_index].get('FR', 1)
 		else:
 			sim_log.error(
@@ -3766,7 +2858,6 @@ class MultiMesh(Mesh8):
 
 		destination_hubs = list(set([dest for dest_list in destinations_node.values() for dest in dest_list]))
 
-		print(destination_hubs)
 		# Phase 1: Route to the hubs of interest
 		paths, distances = routing_fnc(Node_ID, destination_hubs)
 
@@ -3816,7 +2907,7 @@ class MultiMesh(Mesh8):
 		x, y = Node_ID
 		broadcast_destinations = [
 			(xi, yi) for xi in range(self.size) for yi in range(self.size)
-			if xi % longest_link == x and yi % longest_link == y
+			if xi % longest_link == x % longest_link and yi % longest_link == y % longest_link
 		]
 
 		paths_bc, distances = routing_fnc(Node_ID, broadcast_destinations)
@@ -3874,11 +2965,9 @@ class MultiMesh(Mesh8):
 				distance[destination] = distance[hub] + distance_from_hub[destination] - t_router
 			return routes, distance
 
-	"""
-	================
-	Output functions
-	================
-	"""
+	####################################################################################################################
+	# Output Methods
+	####################################################################################################################
 	def readout(self, unused, compressed = None):
 		output = {}
 		int_lst = []
@@ -3901,11 +2990,16 @@ class MultiMesh(Mesh8):
 			for key, edge in self.nodes[node].edges.items():
 				output[str(node)]['edges'][str(key)] = {'length': edge.weight, 'packets_handled': edge.packets_handled}
 				if not unused or edge.packets_handled or self.nodes[key].edges[node].packets_handled:
-					if edge.weight == 1:
-						link_lst1.append(edge.packets_handled)
-					else:
-						link_lst2.append(edge.packets_handled)
+					link_lst1.append(edge.packets_handled)
+					# else:
+					# 	link_lst2.append(edge.packets_handled)
 
+		output['packets_handled_per_node'] = {
+			'average': statistics.mean(router_total),
+			'min': min(router_total),
+			'max': max(router_total),
+			'median': statistics.median(router_total)
+		}
 		output['int_packets_handled'] = {
 			'average': statistics.mean(int_lst),
 			'min': min(int_lst),
@@ -3918,24 +3012,18 @@ class MultiMesh(Mesh8):
 			'max': max(ext_lst),
 			'median': statistics.median(ext_lst)
 		}
-		output['packets_handled_per_node'] = {
-			'average': statistics.mean(router_total),
-			'min': min(router_total),
-			'max': max(router_total),
-			'median': statistics.median(router_total)
-		}
-		output['spikes_per_link_primary_layer'] = {
+		output['spikes_per_link'] = {
 			'average': statistics.mean(link_lst1),
 			'min': min(link_lst1),
 			'max': max(link_lst1),
 			'median': statistics.median(link_lst1)
 		}
-		output['spikes_per_link_secondary_layer'] = {
-			'average': statistics.mean(link_lst2),
-			'min': min(link_lst2),
-			'max': max(link_lst2),
-			'median': statistics.median(link_lst2)
-		}
+		# output['spikes_per_link_secondary_layer'] = {
+		# 	'average': statistics.mean(link_lst2),
+		# 	'min': min(link_lst2),
+		# 	'max': max(link_lst2),
+		# 	'median': statistics.median(link_lst2)
+		# }
 
 		if not compressed:
 			return output
@@ -3953,11 +3041,9 @@ class Mesh3D(Mesh4):
 		self.create_network(size)
 		self.type = 'Mesh3D'
 
-	"""
-	================
-	Building methods
-	================
-	"""
+	####################################################################################################################
+	# Construction Methods
+	####################################################################################################################
 	def create_network(self, size):
 		T0 = time.time()
 		if type(size) == int:
@@ -4012,11 +3098,9 @@ class Mesh3D(Mesh4):
 		elif self.torus:
 			self.add_edge(node, (x_coord, y_coord, (z_coord - length) % self.size[2]), length)
 
-	"""
-	================
-	Factory methods
-	================
-	"""
+	####################################################################################################################
+	# Factory Methods
+	####################################################################################################################
 	def population_mapping(self, mapping_type):
 		if mapping_type.lower() == 'random':
 			return self.random_population_mapping
@@ -4028,12 +3112,9 @@ class Mesh3D(Mesh4):
 				f'Continue with next iteration.')
 			raise sim_log.MappingError
 
-	"""
-	================
-	Routing methods
-	================
-	Top-level
-	"""
+	####################################################################################################################
+	# Routing Methods
+	####################################################################################################################
 	def dimension_order_routing(self, source, destinations):
 		# Prioritizes movement in the x-direction over movement in the y-direction and z-direction
 		# When long range connections are used, this algorithm might not always return the shortest path
@@ -4157,6 +3238,9 @@ class Mesh3D(Mesh4):
 
 		return delta
 
+	####################################################################################################################
+	# Mapping Methods
+	####################################################################################################################
 	# Mapping Sub-methods
 	def distance(self, node_A, node_B):
 		# Calculates the distance between two nodes, The euclydean distance in this case
@@ -4165,29 +3249,164 @@ class Mesh3D(Mesh4):
 		return distance
 
 
-class HubNetwork(Mesh4):
-	def __init__(self, size, torus, link_length, topology = 'mesh4'):
+class StackedNetwork(Network):
+	def __init__(self, size, layers, interconnect_top, torus):
 		Network.__init__(self)
-		self.torus = True
-		if size % link_length:
-			sim_log.notice(
-				f'The given network size {size} is not a multiple of the link length {link_length}.\n'
-				f'The network size is increased to {ceil(size / link_length) * link_length} '
-				f'in order to achieve an evenly distribution of hubs.')
-			size = ceil(size / link_length) * link_length
-		if torus == 'False':
-			sim_log.notice(
-				'At this point in time, the HubNetwork class always assumes torus connections in the secondary level.\n'
-				'Current run is set up with torus = False')
-		sim_log.message('Create lower level Mesh4 hardware graph')
+		sim_log.message(f'Create stacked {interconnect_top} hardware graph with {layers} layers:')
 		self.size = size
-		self.hubs = []
-		self.link_length = link_length
+		self.layers = layers
+		self.torus = torus
+		self.interconnect_top = interconnect_top
+		self.type = f'Stacked {layers}x{interconnect_top}'
 		self.create_network(size)
-		self.create_secondary_level(topology, link_length)
-		self.sec_topology = topology
-		self.type = 'Hub-Network'
 
+	####################################################################################################################
+	# Construction Methods
+	####################################################################################################################
+	def add_switch(self, key):
+		if key in self.nodes:
+			sim_log.warning(f'add_node({key}): A node with the key {key} already exists.')
+		else:
+			self.nodes[key] = self.Node()
+
+	# Only used to create edges between "Switch" Vertices
+	def add_edge(self, vertex_A, vertex_B, weight = 1):
+		if vertex_A not in self.nodes:
+			sim_log.error(
+				f'add_edge({vertex_A}, {vertex_B}): Switch {vertex_A} does not exist in the network.')
+		if vertex_B not in self.nodes:
+			sim_log.error(
+				f'add_edge({vertex_A}, {vertex_B}): Switch {vertex_B} does not exist in the network.')
+		elif vertex_B in self.nodes[vertex_A].edges:
+			sim_log.warning(
+				f'add_edge({vertex_A}, {vertex_B}): A link from Switch {vertex_A} to Switch {vertex_B} already exists.\n'
+				f'Update link weight: {self.nodes[vertex_A].edges[vertex_B].weight} -> {weight}')
+			self.nodes[vertex_A].edges[vertex_B].weight = weight
+		else:
+			self.nodes[vertex_A].edges[vertex_B] = self.Edge(weight)
+
+	def add_merger(self, x, y, weight = 1):
+		self.nodes[(x, y, 'm')] = self.Node()
+		for z in range(self.layers):
+			if (x, y, z, 'n') not in self.nodes:
+				sim_log.error(f'add_merger({(x, y, z)}): Node {(x, y, z)} does not exist in the network')
+			elif (x, y, z, 's') not in self.nodes:
+				sim_log.error(f'add_merger({(x, y, z)}): Switch {(x, y, z)} does not exist in the network')
+			else:
+				self.nodes[(x, y, z, 's')].edges[(x, y, 'm')] = self.Edge(weight)
+				self.nodes[(x, y, 'm')].edges[(x, y, z, 'n')] = self.Edge(weight)
+
+	def add_uplink(self, x, y, z, weight = 1):
+		node = (x, y, z, 'n')
+
+		if (x, y, z, 'n') not in self.nodes:
+			sim_log.error(f'add_uplink({node}): Node {node} does not exist in the network')
+		elif (x, y, z, 's') not in self.nodes:
+			sim_log.error(f'add_uplink({node}): Switch {node} does not exist in the network')
+		elif (x, y, z, 's') in self.nodes[node].edges:
+			sim_log.warning(
+				f'add_uplink({node}, {node}): An up link from Node {node} to switch {node} already exists.\n'
+				f'Update link weight: {self.nodes[node].edges["Uplink"].weight} -> {weight}')
+			self.nodes[node].edges[(x, y, z, 's')].weight = weight
+		else:
+			self.nodes[node].edges[(x, y, z, 's')] = self.Edge(weight)
+
+	def create_network(self, size):
+		T0 = time.time()
+		if type(size) == int:
+			self.size = [size, size]
+		else:
+			self.size = size
+
+		# Generate all nodes
+		for y in range(self.size[1]):
+			for x in range(self.size[0]):
+				for z in range(self.layers):
+					self.add_switch((x, y, z, 's'))
+					self.add_node((x, y, z, 'n'))
+
+					# Add "upwards" connection from Node to Switch with the same coordinates
+					self.add_uplink(x, y, z)
+
+				self.add_merger(x, y)
+
+		# Create connection to all neighbours for each switch
+		for switch in self.nodes:
+			try:
+				if switch[3] == 's':
+					self.connect_in_grid(switch)
+			except IndexError:
+				if switch[2] == 'm':
+					pass
+				else:
+					raise Exception
+
+		sim_log.message(f'\tGenerated {self.layers} layers of {(self.size[0])} x {(self.size[1])} nodes.')
+
+		sim_log.message(f'\tConnected all Switches in a grid per layer')
+		if self.torus:
+			sim_log.message('\tOuter nodes are connected to opposite sides as specified by torus parameter.')
+		sim_log.message(f'\tGraph generated in: {convert_time(time.time() - T0)}')
+
+	def connect_in_grid(self, switch):
+		if self.interconnect_top.lower() not in ['mesh4', 'mesh6', 'mesh8']:
+			sim_log.fatal_error(f'No valid top level interconnect selected.')
+		x, y, z = switch[0], switch[1], switch[2]
+		if x > 0:
+			x_prev = x - 1
+		elif self.torus:
+			x_prev = self.size[0] - 1
+		else:
+			x_prev = 'NaN'
+
+		if x < self.size[0] - 1:
+			x_next = x + 1
+		elif self.torus:
+			x_next = 0
+		else:
+			x_next = 'NaN'
+
+		if y > 0:
+			y_prev = y - 1
+		elif self.torus:
+			y_prev = self.size[1] - 1
+		else:
+			y_prev = 'NaN'
+
+		if y < self.size[1] - 1:
+			y_next = y + 1
+		elif self.torus:
+			y_next = 0
+		else:
+			y_next = 'NaN'
+
+		if x_prev != 'NaN':
+			self.add_edge((x, y, z, 's'), (x_prev, y, z, 's'))
+		if x_next != 'NaN':
+			self.add_edge((x, y, z, 's'), (x_next, y, z, 's'))
+		if y_prev != 'NaN':
+			self.add_edge((x, y, z, 's'), (x, y_prev, z, 's'))
+		if y_next != 'NaN':
+			self.add_edge((x, y, z, 's'), (x, y_next, z, 's'))
+
+		if self.interconnect_top.lower() == 'mesh6':
+			if x_prev != 'NaN' and y_prev != 'NaN':
+				self.add_edge((x, y, z, 's'), (x_prev, y_prev, z, 's'))
+			if x_next != 'NaN' and y_next != 'NaN':
+				self.add_edge((x, y, z, 's'), (x_next, y_next, z, 's'))
+		elif self.interconnect_top.lower() == 'mesh8':
+			if x_prev != 'NaN' and y_prev != 'NaN':
+				self.add_edge((x, y, z, 's'), (x_prev, y_prev, z, 's'))
+			if x_next != 'NaN' and y_next != 'NaN':
+				self.add_edge((x, y, z, 's'), (x_next, y_next, z, 's'))
+			if x_prev != 'NaN' and y_next != 'NaN':
+				self.add_edge((x, y, z, 's'), (x_prev, y_next, z, 's'))
+			if x_next != 'NaN' and y_prev != 'NaN':
+				self.add_edge((x, y, z, 's'), (x_next, y_prev, z, 's'))
+
+	####################################################################################################################
+	# Factory Methods
+	####################################################################################################################
 	def routing_algorithm(self, routing_type):
 		if routing_type.lower() == 'dor':
 			return self.dimension_order_routing
@@ -4195,201 +3414,412 @@ class HubNetwork(Mesh4):
 			return self.longest_dimension_first_routing
 		elif routing_type.lower() == 'spr' or routing_type.lower() == 'dijkstra':
 			return self.dijkstra
+		elif routing_type.lower() == 'espr':
+			return self.enhanced_shortest_path
+		elif routing_type.lower() == 'ner':
+			return self.neighbour_exploration_routing
 		else:
 			sim_log.error(
-				f'Given routing algorithm {routing_type} is not recognized or implemented for Hub networks. '
+				f'Given routing algorithm {routing_type} is not recognized or implemented. '
 				f'Continue with next iteration.')
 			raise sim_log.RoutingError
 
-	def create_secondary_level(self, topology, weight = 1):
-		size = self.size
-		if topology.lower() == 'mesh4':
-			sim_log.message('Create secondary level Mesh4-connections')
-
-			# Create connection to all neighbours for each node
-			for (x, y) in self.nodes.keys():
-				if x % self.link_length == floor(self.link_length / 2) and y % self.link_length == floor(
-						self.link_length / 2):
-					self.add_edge((x, y), ((x + self.link_length) % size[0], y), weight)
-					self.add_edge((x, y), (x, (y + self.link_length) % size[1]), weight)
-					self.add_edge((x, y), ((x - self.link_length) % size[0], y), weight)
-					self.add_edge((x, y), (x, (y - self.link_length) % size[1]), weight)
-					self.hubs.append((x, y))
-		elif topology.lower() == 'mesh6':
-			sim_log.message('Create secondary level Mesh6-connections')
-
-			# Create connection to all neighbours for each node
-			for (x, y) in self.nodes.keys():
-				if x % self.link_length == floor(self.link_length / 2) and y % self.link_length == floor(
-						self.link_length / 2):
-					self.add_edge((x, y), ((x + self.link_length) % size[0], y), weight)
-					self.add_edge((x, y), (x, (y + self.link_length) % size[1]), weight)
-					self.add_edge((x, y), ((x - self.link_length) % size[0], y), weight)
-					self.add_edge((x, y), (x, (y - self.link_length) % size[1]), weight)
-					self.add_edge((x, y), ((x + self.link_length) % size[0], (y + self.link_length) % size[1]), weight)
-					self.add_edge((x, y), ((x - self.link_length) % size[0], (y - self.link_length) % size[1]), weight)
-					self.hubs.append((x, y))
-		elif topology.lower() == 'mesh8':
-			sim_log.message('Create secondary level Mesh8-connections')
-
-			# Create connection to all neighbours for each node
-			for (x, y) in self.nodes.keys():
-				if x % self.link_length == floor(self.link_length / 2) and y % self.link_length == floor(
-						self.link_length / 2):
-					self.add_edge((x, y), ((x + self.link_length) % size[0], y), weight)
-					self.add_edge((x, y), (x, (y + self.link_length) % size[1]), weight)
-					self.add_edge((x, y), ((x - self.link_length) % size[0], y), weight)
-					self.add_edge((x, y), (x, (y - self.link_length) % size[1]), weight)
-					self.add_edge((x, y), ((x + self.link_length) % size[0], (y + self.link_length) % size[1]), weight)
-					self.add_edge((x, y), ((x - self.link_length) % size[0], (y - self.link_length) % size[1]), weight)
-					self.add_edge((x, y), ((x + self.link_length) % size[0], (y - self.link_length) % size[1]), weight)
-					self.add_edge((x, y), ((x - self.link_length) % size[0], (y + self.link_length) % size[1]), weight)
-					self.hubs.append((x, y))
-		elif topology.lower() == 'rotated grid':
-			# TODO: Change, now we get two seperated secondary levels
-			# TODO: Implement Rotated grid
-			sim_log.message('Create secondary level 45 degrees rotated Mesh4-connections')
-
-			# Create connection to all neighbours for each node
-			for (x, y) in self.nodes.keys():
-				if x % self.link_length == floor(self.link_length / 2) and y % self.link_length == floor(
-						self.link_length / 2):
-					self.add_edge((x, y), ((x + self.link_length) % size[0], (y + self.link_length) % size[1]), weight)
-					self.add_edge((x, y), ((x + self.link_length) % size[0], (y - self.link_length) % size[1]), weight)
-					self.add_edge((x, y), ((x - self.link_length) % size[0], (y - self.link_length) % size[1]), weight)
-					self.add_edge((x, y), ((x - self.link_length) % size[0], (y + self.link_length) % size[1]), weight)
-					self.hubs.append((x, y))
-
-		sim_log.message(f'\tSecondary level generated.')
-
-	def closest_hub(self, Node):
-		x, y = Node
-		Hx = floor(x / self.link_length) * self.link_length + floor(self.link_length / 2)
-		Hy = floor(y / self.link_length) * self.link_length + floor(self.link_length / 2)
-
-		return Hx, Hy
-
-	def route_to_closest_hub(self, Node, routing_function):
-		closest_hub = self.closest_hub(Node)
-		path_h, distance_h = routing_function(Node, [closest_hub])
-		distance_to_hub = distance_h[closest_hub] * t_router + distance_h[closest_hub] * t_link
-		route_to_hub = []
-		current_node = closest_hub
-		while path_h[current_node] != 'source':
-			route_to_hub.append((path_h[current_node], current_node))
-			current_node = path_h[current_node]
-
-		return route_to_hub, distance_to_hub, closest_hub
-
-	def mapping_module(self, mapping_type):
-		if mapping_type.lower() == 'random':
-			return self.random_placement
-		elif mapping_type.lower() == 'sequential':
-			return self.sequential_placement
-		elif mapping_type.lower() == 'potjans_diesmann':
-			return self.potjans_diesmann
-		elif mapping_type.lower() == 'quadratic_wirelength':
-			return self.quadratic_wirelength
-		if mapping_type.lower() == 'min_cut' or mapping_type.lower() == 'minimum_cut':
-			return self.min_cut
-		elif mapping_type.lower() == 'simulated_annealing' or mapping_type.lower() == 'sa':
-			return self.simulated_annealing
-		elif mapping_type.lower() == 'clustering':
-			return self.clustering
+	def population_mapping(self, mapping_type):
+		if mapping_type.lower() == 'sequential':
+			return self.sequential_population_mapping
+		elif mapping_type.lower() == 'space_filling_curve':
+			return self.space_filling_curve
+		elif mapping_type.lower() == 'random':
+			sim_log.error('The "Stacked ..-Mesh" networks are optimized for clustered placement, Random mapping not supported.')
+			raise sim_log.MappingError
 		else:
 			sim_log.error(
 				f'Given mapping algorithm {mapping_type} is not recognized or implemented. '
 				f'Continue with next iteration.')
 			raise sim_log.MappingError
 
-	def population_mapping(self, mapping_type):
-		if mapping_type.lower() == 'random':
-			return self.random_population_mapping
-		if mapping_type.lower() == 'sequential':
-			return self.sequential_population_mapping
-		if mapping_type.lower() == 'population_placement':
-			return self.population_placement
-		if mapping_type.lower() == 'clustered':
-			return self.clustered_placement
-		if mapping_type.lower() == '':
-			pass
-			#TODO: Add area clustered mapping grouping areas in clusters together
+	####################################################################################################################
+	# Casting Methods
+	####################################################################################################################
+	def population_casting(self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, placement_map = None):
+		routing_fnc = self.routing_algorithm(routing_type)
+		latency = {}
+		destinations_node = {}
+		number_of_spikes = 0
+		firing_rate = {}
+		occupied_links = {}
 
-	"""
-	================
-	Mapping Algorithms
-	================
-	"""
-	def cluster_placement(self, NpN, matrix, **rest_args):
-		sim_log.message('Determining mapping of neurons... (Cluster placement)')
-		T0 = time.time()
-		network_size = sum([population["neurons"] for population in matrix])
-		ratio = 0
-		neurons_placed = 0
-		print(f'Mapping neurons to network\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
+		if netlist:
+			sim_log.error(
+				f'The Stacked {self.interconnect_top} topology is meant for large scale Neural Networks.\n'
+				f'It is recommended to perform large scale test cases using the matrix based simulation settings.')
+			raise sim_log.SimError
+		elif matrix:
+			populations = [item['population'] for item in matrix]
+			for (tally, population) in Node_object.neurons:
+				population_index = populations.index(population)
+				if matrix[population_index].get('FR', 1) == 0:
+					continue
 
-		Nodes = list(self.nodes.keys())
-		current_node = Nodes.pop(0)
-		mapped_to_node = 0
+				destinations = []
+				for i in range(len(matrix[population_index]['connectivity_prob'])):
+					if matrix[population_index]['connectivity_prob'][i]:
+						destinations = destinations + placement_map[populations[i]]
 
-		for population in matrix:
-			population_name = population['population']
-			population_size = population['neurons']
-			neuron_counter = 0
+				neuron_ID = f'{Node_ID}_{population}'
 
-			try:
-				while neuron_counter < population_size:
-					if mapped_to_node < NpN:
-						tally = min(population_size - neuron_counter, NpN - mapped_to_node)
-						self.nodes[current_node].neurons.append((tally, population_name))
-						mapped_to_node += tally
-						neuron_counter += tally
-						neurons_placed += tally
-						if round(neurons_placed / network_size * 1000) / 10 > ratio:
-							ratio = round(neurons_placed / network_size * 1000) / 10
-							print(
-								f'Mapping neurons randomly to network\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
+				destinations_node[neuron_ID] = list(set(destinations))
+				firing_rate[neuron_ID] = matrix[population_index].get('FR', 1) * tally
 
-					else:
-						check_sum = sum([tally for tally, pop in self.nodes[current_node].neurons])
-						if check_sum != NpN:
-							sim_log.error(
-								f'Expected number of neurons mapped to node {current_node} is {mapped_to_node}.\n'
-								f'Actual number = {check_sum}.\n'
-								f'Node contains the following neurons: {self.nodes[current_node].neurons}')
-							raise sim_log.MappingError
+		else:
+			sim_log.error(
+				f'Either a NN netlist or a connectivity probability matrix is required to run the simulation.\n'
+				f'Abort!')
+			raise sim_log.SimError
 
-						current_node = Nodes.pop(0)
-						mapped_to_node = 0
-			except IndexError:
-				sim_log.error(
-					f'All nodes have been filled.\n{neurons_placed} neurons have been placed, '
-					f'{network_size - neurons_placed} have not.')
-				raise sim_log.MappingError()
+		if routing_type.lower() == 'espr' or routing_type.lower() == 'ner':
+			for neuron, destinations_neuron in destinations_node.items():
+				number_of_spikes += firing_rate[neuron]
 
-		sim_log.message(
-			f'Mapped {network_size} neurons to hardware in {convert_time(time.time() - T0)}.\n'
-			f'Hardware utilization: {round(network_size / (len(self.nodes) * NpN) * 1000) / 10}%\n')
+				source_switch = (Node_ID[0], Node_ID[1], Node_ID[2], 's')
+				target_cluster = []
+				for dest in destinations_neuron:
+					if (dest[0], dest[1], Node_ID[2], 's') not in target_cluster:
+						target_cluster.append((dest[0], dest[1], Node_ID[2], 's'))
 
+				paths, distances = routing_fnc(source_switch, target_cluster)
+				routes = convert_path_to_route_uc(paths, target_cluster)
 
-	"""
-	================
-	Routing methods
-	================
-	"""
-	def secondary_layer_routing(self, source, destinations, dist):  # Fixed at LDFR algorithm
-		if self.sec_topology.lower() == 'mesh4':
-			return self.secondary_Mesh4_routing(source, destinations, dist)
-		elif self.sec_topology.lower() == 'mesh6':
-			return self.secondary_Mesh6_routing(source, destinations, dist)
-		elif self.sec_topology.lower() == 'mesh8':
-			return self.secondary_Mesh8_routing(source, destinations, dist)
-		elif self.sec_topology.lower() == 'rotated grid':
-			return self.secondary_rotated_grid_routing(source, destinations, dist)
+				# Send spike packet over the uplink to the source switch
+				link = (Node_ID, source_switch)
+				occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
 
-	def secondary_Mesh4_routing(self, source, destinations, dist):
-		distance = {source: dist}
-		path = {source: 'hub'}
+				for cluster in target_cluster:
+					for link in routes[cluster]:
+						occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+
+					# Send spike packet over the downlink from the switch to the merger
+					link = (cluster, (cluster[0], cluster[1], 'm'))
+					occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+
+				# Send spike packets from the merger to the nodes
+				for destination in destinations_neuron:
+					link = ((destination[0], destination[1], 'm'), destination)
+					occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+					distances[destination] = distances[(destination[0], destination[1], Node_ID[2], 's')]
+
+				latency[neuron] = max([distances[target_Node] for target_Node in destinations_neuron])
+
+		else:
+			source_switch = (Node_ID[0], Node_ID[1], Node_ID[2], 's')
+			all_target_switches = []
+			for destinations_neuron in destinations_node.values():
+				for dest in destinations_neuron:
+					if (dest[0], dest[1], Node_ID[2], 's') not in all_target_switches:
+						all_target_switches.append((dest[0], dest[1], Node_ID[2], 's'))
+
+			paths, distances = routing_fnc(source_switch, all_target_switches)
+			routes = convert_path_to_route(paths, all_target_switches)
+
+			for neuron, destinations_neuron in destinations_node.items():
+				number_of_spikes += firing_rate[neuron]
+				neuron_route = []
+				target_clusters = []
+				for dest in destinations_neuron:
+					if (dest[0], dest[1], Node_ID[2], 's') not in target_clusters:
+						target_clusters.append((dest[0], dest[1], Node_ID[2], 's'))
+
+				# Send spike packet over the uplink to the source switch
+				link = (Node_ID, source_switch)
+				occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+
+				for cluster in target_clusters:
+					neuron_route += routes[cluster]
+
+					# Sending spike packet over the downlink from the switch to the merger
+					link = (cluster, (cluster[0], cluster[1], 'm'))
+					occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+
+				# Remove duplicates
+				neuron_route = list(set(neuron_route))
+
+				for link in neuron_route:
+					occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+
+				# Sending spike packets from the merger to the nodes
+				for destination in destinations_neuron:
+					link = ((destination[0], destination[1], 'm'), destination)
+					occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+					distances[destination] = distances[(destination[0], destination[1], Node_ID[2], 's')]
+
+				latency[neuron] = max([distances[destination] for destination in destinations_neuron])
+
+		return Node_ID, occupied_links, number_of_spikes, latency
+
+	def cluster_casting(self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, placement_map = None):
+		routing_fnc = self.routing_algorithm(routing_type)
+		latency = {}
+		destinations_node = {}
+		number_of_spikes = 0
+		firing_rate = {}
+		occupied_links = {}
+
+		if netlist:
+			sim_log.error(
+				f'The Stacked {self.interconnect_top} topology is meant for large scale Neural Networks.\n'
+				f'It is recommended to perform large scale test cases using the matrix based simulation settings.')
+			raise sim_log.SimError
+		elif matrix:
+			populations = [item['population'] for item in matrix]
+			for (tally, population) in Node_object.neurons:
+				population_index = populations.index(population)
+				if matrix[population_index].get('FR', 1) == 0:
+					continue
+
+				destinations = []
+				for i in range(len(matrix[population_index]['connectivity_prob'])):
+					# Add all potential targets as destination
+					if matrix[population_index]['connectivity_prob'][i]:
+						destinations = destinations + placement_map[populations[i]]
+
+				neuron_ID = f'{Node_ID}_{population}'
+				destinations_node[neuron_ID] = list(set(destinations))
+				firing_rate[neuron_ID] = matrix[population_index].get('FR', 1) * tally
+		else:
+			sim_log.error(
+				f'Either a NN netlist or a connectivity probability matrix is required to run the simulation.\n'
+				f'Abort!')
+			raise sim_log.SimError
+
+		if routing_type.lower() == 'espr' or routing_type.lower() == 'ner':
+			for neuron, destinations_neuron in destinations_node.items():
+				number_of_spikes += firing_rate[neuron]
+
+				source_switch = (Node_ID[0], Node_ID[1], Node_ID[2], 's')
+				target_cluster = []
+				for dest in destinations_neuron:
+					if (dest[0], dest[1], Node_ID[2], 's') not in target_cluster:
+						target_cluster.append((dest[0], dest[1], Node_ID[2], 's'))
+
+				paths, distances = routing_fnc(source_switch, target_cluster)
+				routes = convert_path_to_route(paths, target_cluster)
+
+				# Send spike packet over the uplink to the source switch
+				link = (Node_ID, source_switch)
+				occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+
+				for cluster in target_cluster:
+					for link in routes[cluster]:
+						occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+
+					# Send spike packet over the downlink from the switch to the merger
+					link = (cluster, (cluster[0], cluster[1], 'm'))
+					occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+
+					# Send spike packets from the merger to all sub nodes
+					for z in range(self.layers):
+						link = ((cluster[0], cluster[1], 'm'), (cluster[0], cluster[1], z, 'n'))
+						occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+
+				for destination in destinations_neuron:
+					distances[destination] = distances[(destination[0], destination[1], Node_ID[2], 's')]
+
+				latency[neuron] = max([distances[target_Node] for target_Node in destinations_neuron])
+
+		else:
+			source_switch = (Node_ID[0], Node_ID[1], Node_ID[2], 's')
+			all_target_switches = []
+			for destinations_neuron in destinations_node.values():
+				for dest in destinations_neuron:
+					if (dest[0], dest[1], Node_ID[2], 's') not in all_target_switches:
+						all_target_switches.append((dest[0], dest[1], Node_ID[2], 's'))
+
+			paths, distances = routing_fnc(source_switch, all_target_switches)
+			routes = convert_path_to_route_uc(paths, all_target_switches)
+
+			for neuron, destinations_neuron in destinations_node.items():
+				number_of_spikes += firing_rate[neuron]
+				neuron_route = []
+				target_clusters = []
+				for dest in destinations_neuron:
+					if (dest[0], dest[1], Node_ID[2], 's') not in target_clusters:
+						target_clusters.append((dest[0], dest[1], Node_ID[2], 's'))
+
+				# Send spike packet over the uplink to the source switch
+				link = (Node_ID, source_switch)
+				occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+
+				for cluster in target_clusters:
+					neuron_route += routes[cluster]
+
+					# Sending spike packet over the downlink from the switch to the merger
+					link = (cluster, (cluster[0], cluster[1], 'm'))
+					occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+
+					if cluster != source_switch and cluster not in [temp[1] for temp in neuron_route]:
+						sim_log.fatal_error(
+							f'Cluster: {cluster} sends spike to local merger but is not part of the source neuron route...\n{neuron_route}')
+
+					# Send spike packets from the merger to all sub nodes
+					for z in range(self.layers):
+						link = ((cluster[0], cluster[1], 'm'), (cluster[0], cluster[1], z, 'n'))
+						occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+
+				# Remove duplicates
+				neuron_route = list(set(neuron_route))
+
+				for link in neuron_route:
+					occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+
+				for destination in destinations_neuron:
+					distances[destination] = distances[(destination[0], destination[1], Node_ID[2], 's')]
+
+				latency[neuron] = max([distances[target_Node] for target_Node in destinations_neuron])
+
+		return Node_ID, occupied_links, number_of_spikes, latency
+
+	def multicast(self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, **_kwargs):
+		routing_fnc = self.routing_algorithm(routing_type)
+		latency = {}
+		destinations_node = {}
+		number_of_spikes = 0
+		firing_rate = {}
+		occupied_links = {}
+
+		if netlist:
+			sim_log.error(
+				f'The Stacked {self.interconnect_top} topology is meant for large scale Neural Networks.\n'
+				f'It is recommended to perform large scale test cases using the matrix based simulation settings.')
+			raise sim_log.SimError
+		elif matrix:
+			populations = [item['population'] for item in matrix]
+			for (tally, population) in Node_object.neurons:
+				population_index = populations.index(population)
+				if matrix[population_index].get('FR', 1) == 0:
+					continue
+
+				probability_dict = self.destination_nodes_probabilities(population_index, matrix)
+				for i in range(tally):
+					destinations_neuron = self.destination_nodes_matrix(probability_dict)
+
+					neuron_ID = f'{Node_ID}_{population}_{i}'
+					destinations_node[neuron_ID] = destinations_neuron
+					firing_rate[neuron_ID] = matrix[population_index].get('FR', 1)
+
+		else:
+			sim_log.error(
+				f'Either a NN netlist or a connectivity probability matrix is required to run the simulation.\n'
+				f'Abort!')
+			raise sim_log.SimError
+
+		if routing_type.lower() == 'espr' or routing_type.lower() == 'ner':
+			for neuron, destinations_neuron in destinations_node.items():
+				number_of_spikes += firing_rate[neuron]
+
+				source_switch = (Node_ID[0], Node_ID[1], Node_ID[2], 's')
+				target_cluster = []
+				for dest in destinations_neuron:
+					if (dest[0], dest[1], Node_ID[2], 's') not in target_cluster:
+						target_cluster.append((dest[0], dest[1], Node_ID[2], 's'))
+
+				paths, distances = routing_fnc(source_switch, target_cluster)
+				routes = convert_path_to_route(paths, target_cluster)
+
+				# Send spike packet over the uplink to the source switch
+				link = (Node_ID, source_switch)
+				occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+
+				for cluster in target_cluster:
+					for link in routes[cluster]:
+						occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+
+					# Send spike packet over the downlink from the switch to the merger
+					link = (cluster, (cluster[0], cluster[1], 'm'))
+					occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+
+				# Send spike packets from the merger to the target nodes
+				for destination in destinations_neuron:
+					link = ((destination[0], destination[1], 'm'), destination)
+					occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+					distances[destination] = distances[(destination[0], destination[1], Node_ID[2], 's')]
+
+				latency[neuron] = max([distances[target_Node] for target_Node in destinations_neuron])
+
+		else:
+			source_switch = (Node_ID[0], Node_ID[1], Node_ID[2], 's')
+			all_target_switches = []
+			for destinations_neuron in destinations_node.values():
+				for dest in destinations_neuron:
+					if (dest[0], dest[1], Node_ID[2], 's') not in all_target_switches:
+						all_target_switches.append((dest[0], dest[1], Node_ID[2], 's'))
+
+			paths, distances = routing_fnc(source_switch, all_target_switches)
+			routes = convert_path_to_route_uc(paths, all_target_switches)
+
+			for neuron, destinations_neuron in destinations_node.items():
+				number_of_spikes += firing_rate[neuron]
+				neuron_route = []
+				target_clusters = []
+				for dest in destinations_neuron:
+					if (dest[0], dest[1], Node_ID[2], 's') not in target_clusters:
+						target_clusters.append((dest[0], dest[1], Node_ID[2], 's'))
+
+				# Send spike packet over the uplink to the source switch
+				link = (Node_ID, source_switch)
+				occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+
+				for cluster in target_clusters:
+					neuron_route += routes[cluster]
+
+					# Sending spike packet over the downlink from the switch to the merger
+					link = (cluster, (cluster[0], cluster[1], 'm'))
+					if cluster != source_switch and cluster not in [temp[1] for temp in neuron_route]:
+						sim_log.fatal_error(
+							f'Cluster: {cluster} sends spike to local merger but is not part of the source neuron route...'
+							f'\n{neuron_route}\n'
+							f'{Node_ID}\n'
+							f'{all_target_switches}\n'
+							f'{routes[cluster]}\n'
+							f'{routes}\n'
+							f'{paths}'
+						)
+					occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+
+				# Remove duplicates
+				neuron_route = list(set(neuron_route))
+
+				for link in neuron_route:
+					occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+
+				# Sending spike packets from the merger to the nodes
+				for destination in destinations_neuron:
+					link = ((destination[0], destination[1], 'm'), destination)
+					occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+					distances[destination] = distances[(destination[0], destination[1], Node_ID[2], 's')]
+
+				latency[neuron] = max([distances[target_Node] for target_Node in destinations_neuron])
+
+		return Node_ID, occupied_links, number_of_spikes, latency
+
+	# Casting sub-Methods
+	def placement_dict(self):
+		placement_map = {}
+		for key, node in self.nodes.items():
+			if node.neurons:
+				for (tally, pop) in node.neurons:
+					placement_map[pop] = placement_map.get(pop, []) + [key]
+
+		return placement_map
+
+	####################################################################################################################
+	# Routing Methods
+	####################################################################################################################
+	def dimension_order_routing(self, source, destinations):
+		# Prioritizes movement in the x-direction over movement in the y direction (and movement in the w direction)
+		# Add an additional router hop and link hop to the latency to account for the initial uplink and the target merger tree
+		distance = {source: 2 * t_router + t_link}
+		path = {source: 'source'}
+
 		for destination in destinations:
 			if destination in path:
 				# Destination has already been visited during a prior calculation, continue to next destination
@@ -4397,49 +3827,49 @@ class HubNetwork(Mesh4):
 			else:
 				current_node = source
 
-			delta_x, delta_y = self.delta(source, destination)
-			deltas = {
-				'x': delta_x,
-				'y': delta_y
-			}
+			deltas = self.delta(source, destination)
 
-			while deltas:
-				temp = {key: abs(item) for key, item in deltas.items()}
-				direction = max(temp, key=temp.get)
-				delta = deltas[direction]
-
-				x, y = direction == 'x', direction == 'y'
-
-				while delta:
+			x, y = 1, 0
+			for delta in deltas:
+				while abs(delta):
 					next_node = \
-						((current_node[0] + self.link_length * sign(delta) * x) % self.size[0],
-						 (current_node[1] + self.link_length * sign(delta) * y) % self.size[1])
+						((current_node[0] + sign(delta) * x) % self.size[0],
+						 (current_node[1] + sign(delta) * y) % self.size[1],
+						 current_node[2], 's')
+
 					if next_node not in self.nodes:
 						sim_log.error(
 							f'While routing from {source} to {destination}, '
-							f'Routing in secondary level calculated the next node: {next_node}, but this node does not exist.')
+							f'dor-routing calculated the next node: {next_node}, but this node does not exist.')
 						raise sim_log.RoutingError()
 					elif next_node not in self.nodes[current_node].edges:
 						sim_log.error(
 							f'While routing from {source} to {destination}, '
-							f'Routing in secondary level tried to go from {current_node} to {next_node}, '
-							f'but no connection exists between these nodes.')
-						raise sim_log.RoutingError()
+							f'dor-routing tried to go from {current_node} to {next_node}, but no connection exists between these nodes.')
+						# raise sim_log.RoutingError()
+						sim_log.fatal_error('see above')
 					else:
 						path[next_node] = current_node
 						distance[next_node] = \
 							distance[current_node] + t_router + self.nodes[current_node].edges[
 								next_node].weight * t_link
 						current_node = next_node
-						delta -= self.link_length * sign(delta)
-
-				del deltas[direction]
+						delta -= sign(delta)
+				x, y = y, -1 if x == y else 1
+				"""
+				The statement x, y = y, -1 if x == y else 1 changes the direction of movement
+					| x	| y		
+				1. 	| 1 | 0		Horizontal
+				2.	| 0	| 1		Vertical
+				3.	| 1	| 1		Diagonal north-east	(Mesh6)
+				4.	| 1	| -1	Diagonal south-east	(Mesh8)
+				"""
 
 		return path, distance
 
-	def secondary_Mesh6_routing(self, source, destinations, dist):
-		distance = {source: dist}
-		path = {source: 'hub'}
+	def longest_dimension_first_routing(self, source, destinations):
+		distance = {source: 2 * t_router + t_link}
+		path = {source: 'source'}
 
 		for destination in destinations:
 			if destination in path:
@@ -4448,88 +3878,7 @@ class HubNetwork(Mesh4):
 			else:
 				current_node = source
 
-			delta_x, delta_y = self.delta(source, destination)
-
-			if delta_x * delta_y >= 0:  # Upper right or lower left quadrant
-				delta_w = min((delta_x, delta_y), key=abs)
-				delta_x, delta_y, delta_w = [delta_x - delta_w, delta_y - delta_w, delta_w]
-
-			elif self.torus and \
-				abs(delta_x) + abs(delta_y) > min(self.size[0] - abs(delta_x), self.size[1] - abs(delta_y)):
-				if self.size[0] - abs(delta_x) < self.size[1] - abs(delta_y):
-					delta_x = delta_x - sign(delta_x) * self.size[0]
-				else:
-					delta_y = delta_y - sign(delta_y) * self.size[1]
-
-				delta_w = min((delta_x, delta_y), key=abs)
-
-				delta_x, delta_y, delta_w = [delta_x - delta_w, delta_y - delta_w, delta_w]
-			else:
-				delta_x, delta_y, delta_w = [delta_x, delta_y, 0]
-
-			deltas = {
-				'x': delta_x,
-				'y': delta_y,
-				'w': delta_w
-			}
-
-			while deltas:
-				temp = {key: abs(item) for key, item in deltas.items()}
-				direction = max(temp, key=temp.get)
-				delta = deltas[direction]
-
-				if direction == 'w':
-					x, y = True, True
-				else:
-					x, y = direction == 'x', direction == 'y'
-
-				while delta:
-					next_node = \
-						((current_node[0] + self.link_length * sign(delta) * x) % self.size[0],
-						 (current_node[1] + self.link_length * sign(delta) * y) % self.size[1])
-					if next_node not in self.nodes:
-						sim_log.error(
-							f'While routing from {source} to {destination}, '
-							f'Routing in secondary level calculated the next node: {next_node}, but this node does not exist.')
-						raise sim_log.RoutingError()
-					elif next_node not in self.nodes[current_node].edges:
-						sim_log.error(
-							f'While routing from {source} to {destination}, '
-							f'Routing in secondary level tried to go from {current_node} to {next_node}, '
-							f'but no connection exists between these nodes.')
-						raise sim_log.RoutingError()
-					else:
-						path[next_node] = current_node
-						distance[next_node] = \
-							distance[current_node] + t_router + self.nodes[current_node].edges[
-								next_node].weight * t_link
-						current_node = next_node
-						delta -= self.link_length * sign(delta)
-
-				del deltas[direction]
-
-		return path, distance
-
-	def secondary_Mesh8_routing(self, source, destinations, dist):
-		distance = {source: dist}
-		path = {source: 'hub'}
-
-		for destination in destinations:
-			if destination in path:
-				# Destination has already been visited during a prior calculation, continue to next destination
-				continue
-			else:
-				current_node = source
-
-			delta_x, delta_y = self.delta(source, destination)
-
-			if delta_x * delta_y >= 0:  # Move Diagonally
-				delta_w = min((delta_x, delta_y), key=abs)
-				delta_x, delta_y, delta_w, delta_v = [delta_x - delta_w, delta_y - delta_w, delta_w, 0]
-			else:  # move diagonal from the top left to bottom right
-				delta_v = abs(min((delta_x, delta_y), key=abs)) * sign(delta_x)
-				delta_x, delta_y, delta_w, delta_v = [delta_x - delta_v, delta_y + delta_v, 0, delta_v]
-
+			delta_x, delta_y, delta_w, delta_v = self.delta(source, destination)
 			deltas = {
 				'x': delta_x,
 				'y': delta_y,
@@ -4553,18 +3902,18 @@ class HubNetwork(Mesh4):
 
 				while delta:
 					next_node = \
-						((current_node[0] + self.link_length * sign(delta) * x) % self.size[0],
-						 (current_node[1] + self.link_length * sign(delta) * y) % self.size[1])
+						((current_node[0] + sign(delta) * x) % self.size[0],
+						 (current_node[1] + sign(delta) * y) % self.size[1],
+						 current_node[2], 's')
 					if next_node not in self.nodes:
 						sim_log.error(
 							f'While routing from {source} to {destination}, '
-							f'Routing in secondary level calculated the next node: {next_node}, but this node does not exist.')
+							f'ldfr-routing calculated the next node: {next_node}, but this node does not exist.')
 						raise sim_log.RoutingError()
 					elif next_node not in self.nodes[current_node].edges:
 						sim_log.error(
 							f'While routing from {source} to {destination}, '
-							f'Routing in secondary level tried to go from {current_node} to {next_node}, '
-							f'but no connection exists between these nodes.')
+							f'ldfr-routing tried to go from {current_node} to {next_node}, but no connection exists between these nodes.')
 						raise sim_log.RoutingError()
 					else:
 						path[next_node] = current_node
@@ -4572,805 +3921,496 @@ class HubNetwork(Mesh4):
 							distance[current_node] + t_router + self.nodes[current_node].edges[
 								next_node].weight * t_link
 						current_node = next_node
-						delta -= self.link_length * sign(delta)
+						delta -= sign(delta)
 
 				del deltas[direction]
 
 		return path, distance
 
-	def secondary_rotated_grid_routing(self, source, destinations, dist):
-		# TODO: Implement Rotated grid
-		pass
+	def enhanced_shortest_path(self, source, destinations):
+		distances = {source: 2 * t_router + t_link}
+		path = {source: 'source'}
+		# Sort the destinations according to their APPROXIMATED distance to the source
+		destinations_sorted = self.distance_sort(source, destinations)
 
-	"""
-	================
-	Casting methods
-	================
-	"""
-	def broadcastfirst_unicast(self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, **kargs):
-		routing_fnc = self.routing_algorithm(routing_type)
-		latency = {}
-		destinations = {}
-		number_of_spikes = 0
-		destinations_node = {}
+		while destinations_sorted:
+			# Continue with the next closest unvisited destination
+			current_node = destinations_sorted.pop(0)
+			path.update(self.path_to_intermediate_node(source, current_node, distances))
 
-		routes_pre_phase3, distances_to_hubs = self.broadcastfirst_prephase(Node_ID, routing_fnc)
+		return path, distances
 
-		# Determine destinations
-		if netlist:
-			for neuron in Node_object.neurons:
-				# Convert combined connections list to weighted connections dictionary with unique entries
-				if netlist[neuron]['FR'] == 0:
-					continue
-				destinations_neuron = \
-					[netlist[connection]['location'] for connection in netlist[neuron]['connected_to']]
+	def neighbour_exploration_routing(self, source, destinations):
+		distances = {source: 2 * t_router + t_link}
+		path = {source: 'source'}
+		# Sort the destinations according to their APPROXIMATED distance to the source
+		destinations_sorted = self.distance_sort(source, destinations)
 
-				destinations_node[neuron] = destinations_neuron
-				number_of_spikes += netlist[neuron]['FR']
-				for target in destinations_neuron:
-					destinations[target] = destinations.get(target, 0) + netlist[neuron]['FR']
-		elif matrix:
-			populations = [item['population'] for item in matrix]
-			for (tally, population) in Node_object.neurons:
-				population_index = populations.index(population)
-				if matrix[population_index].get('FR', 1) == 0:
-					continue
+		while destinations_sorted:
+			# Continue with the next closest unvisited destination
+			# Route from this destination to the nearest visited node
+			current_node = destinations_sorted.pop(0)
+			path.update(self.path_to_closest_node(current_node, distances))
 
-				for i in range(tally):
-					destinations_neuron = self.destinations_matrix(population_index, matrix)
+		return path, distances
 
-					neuron_ID = f'{Node_ID}_{population}_{i}'
-					destinations_node[neuron_ID] = destinations_neuron
-					number_of_spikes += matrix[population_index].get('FR', 1)
-					for target in destinations_neuron:
-						destinations[target] = destinations.get(target, 0) + matrix[population_index].get('FR', 1)
+	# Routing Sub-methods
+	def delta(self, source, destination):
+		delta_x, delta_y = destination[0] - source[0], destination[1] - source[1]
+
+		if self.torus:
+			if abs(delta_x) > 1 / 2 * self.size[0]:
+				delta_x -= sign(delta_x) * self.size[0]
+			if abs(delta_y) > 1 / 2 * self.size[1]:
+				delta_y -= sign(delta_y) * self.size[1]
+
+		if self.interconnect_top == 'Mesh4':
+			return [delta_x, delta_y, 0, 0]
+		elif self.interconnect_top == 'Mesh6':
+			if delta_x * delta_y >= 0:  # Upper right or lower left quadrant
+				delta_w = min((delta_x, delta_y), key=abs)
+				return [delta_x - delta_w, delta_y - delta_w, delta_w, 0]
+			elif self.torus and \
+				abs(delta_x) + abs(delta_y) > min(self.size[0] - abs(delta_x), self.size[1] - abs(delta_y)):
+				if self.size[0] - abs(delta_x) < self.size[1] - abs(delta_y):
+					delta_x = delta_x - sign(delta_x) * self.size[0]
+				else:
+					delta_y = delta_y - sign(delta_y) * self.size[1]
+
+				delta_w = min((delta_x, delta_y), key=abs)
+
+				return [delta_x - delta_w, delta_y - delta_w, delta_w, 0]
+			else:
+				return [delta_x, delta_y, 0, 0]
+		elif self.interconnect_top == 'Mesh8':
+			if delta_x * delta_y >= 0:  # Move Diagonally from bottom left to top right
+				delta_w = min((delta_x, delta_y), key=abs)
+				return [delta_x - delta_w, delta_y - delta_w, delta_w, 0]
+			else:  # move diagonal from the top left to bottom right
+				delta_v = abs(min((delta_x, delta_y), key=abs)) * sign(delta_x)
+				return [delta_x - delta_v, delta_y + delta_v, 0, delta_v]
 		else:
-			sim_log.error(
-				f'Either a NN netlist or a connectivity probability matrix is required to run the simulation.\n'
-				f'Abort!')
-			raise sim_log.SimError
-
-		occupied_links, routes_phase3, distances = \
-			self.broadcastfirst_postphase(
-				destinations_node, routes_pre_phase3, number_of_spikes, distances_to_hubs, routing_fnc)
-
-		for destination, firerate in destinations.items():
-			for link in routes_phase3[destination]:
-				occupied_links[link] = occupied_links.get(link, 0) + firerate
-
-		for neuron, destinations_neuron in destinations_node.items():
-			latency.update({
-				neuron: max([distances[target_Node] for target_Node in set(destinations_neuron)])
-			})
-
-		return Node_ID, occupied_links, number_of_spikes, latency
-
-	def broadcastfirst_local_multicast(
-		self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, **kargs):
-		routing_fnc = self.routing_algorithm(routing_type)
-		latency = {}
-		destinations = {}
-		number_of_spikes = 0
-		destinations_node = {}
-
-		routes_pre_phase3, distances_to_hubs = self.broadcastfirst_prephase(Node_ID, routing_fnc)
-
-		# Determine destinations
-		if netlist:
-			for neuron in Node_object.neurons:
-				# Convert combined connections list to weighted connections dictionary with unique entries
-				if netlist[neuron]['FR'] == 0:
-					continue
-				destinations_neuron = \
-					[netlist[connection]['location'] for connection in netlist[neuron]['connected_to']]
-
-				# Remove duplicate target nodes for a single neuron
-				destinations_neuron = list(set(destinations_neuron))
-
-				destinations_node[neuron] = destinations_neuron
-				number_of_spikes += netlist[neuron]['FR']
-				for target in destinations_neuron:
-					destinations[target] = destinations.get(target, 0) + netlist[neuron]['FR']
-		elif matrix:
-			populations = [item['population'] for item in matrix]
-			for (tally, population) in Node_object.neurons:
-				population_index = populations.index(population)
-				if matrix[population_index].get('FR', 1) == 0:
-					continue
-
-				for i in range(tally):
-					destinations_neuron = self.destinations_nodes_matrix(population_index, matrix)
-
-					neuron_ID = f'{Node_ID}_{population}_{i}'
-					destinations_node[neuron_ID] = destinations_neuron
-					number_of_spikes += matrix[population_index].get('FR', 1)
-					for target in destinations_neuron:
-						destinations[target] = destinations.get(target, 0) + matrix[
-							population_index].get('FR', 1)
-		else:
-			sim_log.error(
-				f'Either a NN netlist or a connectivity probability matrix is required to run the simulation.\n'
-				f'Abort!')
-			raise sim_log.SimError
-
-		occupied_links, routes_phase3, distances = \
-			self.broadcastfirst_postphase(
-				destinations_node, routes_pre_phase3, number_of_spikes, distances_to_hubs, routing_fnc)
-
-		if any([destination not in routes_phase3.keys() for destination in destinations.keys()]):
-			print('\n\n')
-			for dest in destinations.keys():
-				if dest not in routes_phase3.keys():
-					print(f'{dest} was not found in the routes_phase3 dictionary')
-
-			print(time.ctime())
-
-		for destination, firerate in destinations.items():
-			for link in routes_phase3[destination]:
-				occupied_links[link] = occupied_links.get(link, 0) + firerate
-
-		for neuron, destinations_neuron in destinations_node.items():
-			latency.update({
-				neuron: max([distances[target_Node] for target_Node in set(destinations_neuron)])
-			})
-
-		return Node_ID, occupied_links, number_of_spikes, latency
-
-	def broadcastfirst_multicast(self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, **kargs):
-		routing_fnc = self.routing_algorithm(routing_type)
-		latency = {}
-		destinations_node = {}
-		firing_rate = {}
-
-		routes_pre_phase3, distances_to_hubs = self.broadcastfirst_prephase(Node_ID, routing_fnc)
-
-		# Determine destinations
-		if netlist:
-			for neuron in Node_object.neurons:
-				if netlist[neuron]['FR'] == 0:
-					continue
-				destinations = \
-					[netlist[connection]['location'] for connection in netlist[neuron]['connected_to']]
-
-				# Remove duplicate target nodes
-				destinations = list(set(destinations))
-				destinations_node[neuron] = destinations
-				firing_rate[neuron] = netlist[neuron]['FR']
-		elif matrix:
-			populations = [item['population'] for item in matrix]
-			for (tally, population) in Node_object.neurons:
-				population_index = populations.index(population)
-				if matrix[population_index].get('FR', 1) == 0:
-					continue
-				for i in range(tally):
-					destinations = self.destinations_nodes_matrix(population_index, matrix)
-
-					# Remove duplicate target nodes
-					destinations = list(set(destinations))
-
-					neuron_ID = f'{Node_ID}_{population}_{i}'
-					destinations_node[neuron_ID] = destinations
-					firing_rate[neuron_ID] = matrix[population_index].get('FR', 1)
-		else:
-			sim_log.error(
-				f'Either a NN netlist or a connectivity probability matrix is required to run the simulation.\n'
-				f'Abort!')
-			raise sim_log.SimError
-
-		number_of_spikes = sum(firing_rate.values())
-
-		occupied_links, routes_phase3, distances = \
-			self.broadcastfirst_postphase(
-				destinations_node, routes_pre_phase3, number_of_spikes, distances_to_hubs, routing_fnc)
-
-		for neuron, destinations_neuron in destinations_node.items():
-			neuron_route = []
-			for destination in destinations_neuron:
-				neuron_route += routes_phase3[destination]
-
-			# Remove duplicates
-			neuron_route = list(set(neuron_route))
-
-			for link in neuron_route:
-				occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
-
-			latency[neuron] = max([distances[target_Node] for target_Node in destinations_neuron])
-
-		return Node_ID, occupied_links, number_of_spikes, latency
-
-	def flood(
-		self, Node_ID, Node_object, routing_type, casting, netlist = None, matrix = None, flooding_routes = None):
-		routing_fnc = self.routing_algorithm(routing_type)
-		latency = {}
-		destinations_node = {}  # only store the hubs which cover at least one destination node
-		number_of_spikes = 0
-		firing_rate = {}
-		occupied_links = {}
-
-		# Phase 0: Determine all hubs that cover at least one destination node
-		if netlist:
-			for neuron in Node_object.neurons:
-				# Convert combined connections list to weighted connections dictionary with unique entries
-				if netlist[neuron]['FR'] == 0:
-					continue
-				destinations = [netlist[connection]['location'] for connection in netlist[neuron]['connected_to']]
-
-				# Remove duplicate target nodes
-				destinations = list(set(destinations))
-				destinations_node[neuron] = list(set([self.closest_hub(destination) for destination in destinations]))
-				firing_rate[neuron] = netlist[neuron]['FR']
-		elif matrix:
-			populations = [item['population'] for item in matrix]
-			for (tally, population) in Node_object.neurons:
-				population_index = populations.index(population)
-				if matrix[population_index].get('FR', 1) == 0:
-					continue
-				for i in range(tally):
-					destinations = self.destinations_nodes_matrix(population_index, matrix)
-
-					# Remove duplicate target nodes
-					destinations = list(set(destinations))
-
-					neuron_ID = f'{Node_ID}_{population}_{i}'
-					destinations_node[neuron_ID] = list(
-						set([self.closest_hub(destination) for destination in destinations]))
-					firing_rate[neuron_ID] = matrix[population_index].get('FR', 1)
-		else:
-			sim_log.error(
-				f'Either a NN netlist or a connectivity probability matrix is required to run the simulation.\n'
-				f'Abort!')
-			raise sim_log.SimError
-
-		# Phase 1: Route to closest hub
-		route_to_closest_hub, distance_to_closest_hub, start_hub = self.route_to_closest_hub(Node_ID, routing_fnc)
-
-		for neuron, destinations_neuron in destinations_node.items():
-			# Phase 2: Route to the hubs of interest
-			paths, distances = self.secondary_layer_routing(start_hub, destinations_neuron, distance_to_closest_hub)
-			routes_to_hubs = []
-			flooding = []
-			for destination in destinations_neuron:
-				current_node = destination
-				while paths[current_node] != 'hub':
-					routes_to_hubs.append((paths[current_node], current_node))
-					current_node = paths[current_node]
-
-				# Phase 3: Flood/Broadcast corresponding hubs
-				flooding += flooding_routes[0][destination]
-
-			if casting == 'mc':
-				routes_to_hubs = list(set(routes_to_hubs)) + route_to_closest_hub
-				number_of_spikes += firing_rate[neuron]
-			elif casting == 'uc':
-				routes_to_hubs = routes_to_hubs + route_to_closest_hub
-				number_of_spikes += firing_rate[neuron]
-
-			for link in routes_to_hubs + flooding:
-				occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
-
-			latency[neuron] = max(
-				[distances[destination] + flooding_routes[1][destination] for destination in destinations_neuron])
-
-		return Node_ID, occupied_links, number_of_spikes, latency
-
-	def uc_flood(
-		self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, flooding_routes = None):
-		return self.flood(Node_ID, Node_object, routing_type, 'uc', netlist, matrix, flooding_routes)
-
-	def mc_flood(
-		self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, flooding_routes = None):
-		return self.flood(Node_ID, Node_object, routing_type, 'mc', netlist, matrix, flooding_routes)
-
-	# Casting sub-Methods
-	def broadcastfirst_prephase(self, Node_ID, routing_fnc):
-		# Phase 1 of casting: move toward the nearest hub
-		route_to_closest_hub, distance_to_closest_hub, start_hub = self.route_to_closest_hub(Node_ID, routing_fnc)
-		# Phase 2 of casting: from nearest hub broadcast to all other hubs
-		route_to_hubs, distances_to_hubs = self.broadcast_hubs(start_hub, distance_to_closest_hub)
-
-		# The combined routes from phase 1 and 2 are used once for every spike send out from this node
-		routes_pre_phase = route_to_closest_hub + route_to_hubs
-
-		return routes_pre_phase, distances_to_hubs
-
-	def broadcastfirst_postphase(
-		self, destinations_node, routes_pre_phase, number_of_spikes, distances_to_hubs, routing_fnc):
-		occupied_links = {}
-		for link in routes_pre_phase:
-			occupied_links[link] = number_of_spikes
-
-		# Phase 3 of casting: From the hubs to all surround destination nodes
-		all_destinations = list(set(
-			[destination for dest_list in destinations_node.values() for destination in dest_list]))
-		routes_phase3, distances = self.route_hubs_to_nodes(all_destinations, distances_to_hubs, routing_fnc)
-
-		return occupied_links, routes_phase3, distances
-
-	def flood_hubs(self):
-		visited_nodes = []
-		flood_routes = {}
-		distances = {}
-
-		for node in self.nodes:
-			if node not in visited_nodes:
-				source_hub = self.closest_hub(node)
-				node_to_hub, distance_from_hub = self.longest_dimension_first_routing(source_hub, [node])
-
-				current_node = node
-				route = []
-				while node_to_hub[current_node] != 'source' and current_node not in visited_nodes:
-					route.append((node_to_hub[current_node], current_node))
-					visited_nodes.append(current_node)
-					current_node = node_to_hub[current_node]
-
-				flood_routes[source_hub] = flood_routes.get(source_hub, []) + route
-
-				if distances.get(source_hub, 0) < distance_from_hub[node] - t_router:
-					distances[source_hub] = distance_from_hub[node] - t_router
-
-		return flood_routes, distances
-
-	def broadcast_hubs(self, nearest_hub, distance_to_hub):
-		paths_hubs, distance = self.secondary_layer_routing(nearest_hub, self.hubs, distance_to_hub)
-		del paths_hubs[nearest_hub]
-		routes_hubs = []
-		for current_node, previous_node in paths_hubs.items():
-			routes_hubs.append((previous_node, current_node))
-
-		return routes_hubs, distance
-
-	def route_hubs_to_nodes(self, destinations, distances_to_hubs, routing_function):
-		distance = distances_to_hubs
-		closest_hubs = {}
-		routes = {}
-		for destination in destinations:
-			closest_hub = self.closest_hub(destination)
-			closest_hubs[closest_hub] = closest_hubs.get(closest_hub, []) + [destination]
-
-		for Hub, local_destinations in closest_hubs.items():
-			path_from_hub, distance_from_hub = routing_function(Hub, local_destinations)
-
-			for destination in local_destinations:
-				routes[destination] = []
-				current_node = destination
-				while current_node != Hub:
-					previous_node = path_from_hub[current_node]
-					routes[destination].append((previous_node, current_node))
-					current_node = previous_node
-
-				distance[destination] = distance[Hub] + distance_from_hub[destination] - t_router
-		return routes, distance
-
-	"""
-	================
-	Output functions
-	================
-	"""
-	def readout(self, unused, compressed = None):
-		output = {}
-		int_lst = []
-		ext_lst = []
-		router_total = []
-		link_lst1 = []
-		link_lst2 = []
-		for node in self.nodes.keys():
-			output[str(node)] = {
-				'int_packets_handled': self.nodes[node].int_packets_handled,
-				'ext_packets_handled': self.nodes[node].ext_packets_handled,
-				'edges': {}
-			}
-			if self.nodes[node].int_packets_handled or not unused:
-				int_lst.append(self.nodes[node].int_packets_handled)
-			if self.nodes[node].ext_packets_handled or not unused:
-				ext_lst.append(self.nodes[node].ext_packets_handled)
-			if (self.nodes[node].ext_packets_handled or self.nodes[node].int_packets_handled) or not unused:
-				router_total.append(self.nodes[node].int_packets_handled + self.nodes[node].ext_packets_handled)
-			for key, edge in self.nodes[node].edges.items():
-				output[str(node)]['edges'][str(key)] = {'length': edge.weight, 'packets_handled': edge.packets_handled}
-				if not unused or edge.packets_handled or self.nodes[key].edges[node].packets_handled:
-					if edge.weight == 1:
-						link_lst1.append(edge.packets_handled)
-					else:
-						link_lst2.append(edge.packets_handled)
-
-		output['int_packets_handled'] = {
-			'average': statistics.mean(int_lst),
-			'min': min(int_lst),
-			'max': max(int_lst),
-			'median': statistics.median(int_lst)
-		}
-		output['ext_packets_handled'] = {
-			'average': statistics.mean(ext_lst),
-			'min': min(ext_lst),
-			'max': max(ext_lst),
-			'median': statistics.median(ext_lst)
-		}
-		output['packets_handled_per_node'] = {
-			'average': statistics.mean(router_total),
-			'min': min(router_total),
-			'max': max(router_total),
-			'median': statistics.median(router_total)
-		}
-		output['spikes_per_link_primary_layer'] = {
-			'average': statistics.mean(link_lst1),
-			'min': min(link_lst1),
-			'max': max(link_lst1),
-			'median': statistics.median(link_lst1)
-		}
-		output['spikes_per_link_secondary_layer'] = {
-			'average': statistics.mean(link_lst2),
-			'min': min(link_lst2),
-			'max': max(link_lst2),
-			'median': statistics.median(link_lst2)
-		}
-
-		if not compressed:
-			return output
-		elif compressed.lower() == 'node':
-			return router_total
-		elif compressed.lower() == 'link':
-			return link_lst1
-
-
-class HubNetwork_BC(Mesh4):
-	def __init__(self, size, torus, N0, RF_weight = 1):
-		Network.__init__(self)
-		self.torus = True
-		if torus == 'False':
-			sim_log.notice(
-				'At this point in time, the HubNetwork class always assumes torus connections in the secondary level.\n'
-				'Current run is set up with torus = False')
-		sim_log.message('Create lower level Mesh4 hardware graph')
-		self.size = size
-		self.N0 = N0
-		self.spectrum = self.Edge(RF_weight)
-		self.hubs = []
-		self.create_network(size)
-		self.create_secondary_level()
-		self.type = 'Hub-Network'
-
-	def routing_algorithm(self, routing_type):
-		if routing_type.lower() == 'dor':
-			return self.dimension_order_routing
-		elif routing_type.lower() == 'ldfr':
-			return self.longest_dimension_first_routing
-		elif routing_type.lower() == 'spr' or routing_type.lower() == 'dijkstra':
-			return self.dijkstra
-		else:
-			sim_log.error(
-				f'Given routing algorithm {routing_type} is not recognized or implemented for Hub networks. '
-				f'Continue with next iteration.')
+			sim_log.error(f'Top level interconnect {self.interconnect_top} not recognised in the delta sub-routing method.')
 			raise sim_log.RoutingError
 
-	def create_secondary_level(self):
-		# Create connection to all neighbours for each node
-		for (x, y) in self.nodes.keys():
-			if x % self.N0 == floor(self.N0 / 2) and y % self.N0 == floor(
-					self.N0 / 2):
-				self.hubs.append((x, y))
-				self.nodes[(x, y)].edges['Spectrum'] = self.spectrum
+	def path_to_intermediate_node(self, source, destination, distances):
+		# Will refer to the nodes as follow: s=source, d=destination & c=intermediate node
+		delta_sd = self.delta(source, destination)
+		closest_nodes = self.distance_sort(destination, distances.keys())
+		for c in closest_nodes:
+			delta_sc = self.delta(source, c)
+			# Check whether the current node lies on a direct path from source to destination
+			if all(
+					[delta_sc[i] in range(0, delta_sd[i] + sign(delta_sd[i]), sign(delta_sd[i]))
+					 for i in range(len(delta_sc))]):
+				path, latency = self.longest_dimension_first_routing(c, [destination])
 
-		sim_log.message(f'\tSecondary level generated.')
+				del path[c]
+				del latency[c]
+				for node, distance_to_c in latency.items():
+					distances[node] = distances[c] + distance_to_c - t_router
 
-	def closest_hub(self, Node):
-		x, y = Node
-		Hx = floor(x / self.N0) * self.N0 + floor(self.N0 / 2)
-		Hy = floor(y / self.N0) * self.N0 + floor(self.N0 / 2)
+				return path
+		sim_log.fatal_error(f'No closest node found, not even the original source.')
 
-		return Hx, Hy
+	def path_to_closest_node(self, destination, distances):
+		branch_node = self.distance_sort(destination, distances.keys())[0]
+		path, latency = self.longest_dimension_first_routing(branch_node, [destination])
 
-	def route_to_closest_hub(self, Node, routing_function):
-		closest_hub = self.closest_hub(Node)
-		path_h, distance_h = routing_function(Node, [closest_hub])
-		distance_to_hub = distance_h[closest_hub] * t_router + distance_h[closest_hub] * t_link
-		route_to_hub = []
-		current_node = closest_hub
-		while path_h[current_node] != 'source':
-			route_to_hub.append((path_h[current_node], current_node))
-			current_node = path_h[current_node]
+		del path[branch_node]
+		del latency[branch_node]
+		for node, distance_from_branch in latency.items():
+			distances[node] = distances[branch_node] + distance_from_branch - t_router
 
-		return route_to_hub, distance_to_hub, closest_hub
+		return path
 
-	"""
-	================
-	Casting methods
-	================
-	"""
-	def broadcastfirst_unicast(self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, **kargs):
-		routing_fnc = self.routing_algorithm(routing_type)
-		latency = {}
-		destinations = {}
-		number_of_spikes = 0
-		destinations_node = {}
+	def distance(self, node_A, node_B):
+		deltas = self.delta(node_A, node_B)
+		return abs(deltas[0]) + abs(deltas[1]) + abs(deltas[2]) + abs(deltas[3])
 
-		routes_pre_phase, distances_to_hubs = self.broadcastfirst_prephase(Node_ID, routing_fnc)
+	####################################################################################################################
+	# Mapping Methods
+	####################################################################################################################
+	def sequential_population_mapping(self, NpN, matrix, neuron_model = 'population', **_kwargs):
+		sim_log.message('Determining mapping of neurons... (Sequential)')
+		T0 = time.time()
+		network_size = sum([population["neurons"] for population in matrix])
+		ratio = 0
+		neurons_placed = 0
+		print(f'Mapping neurons to network\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
 
-		# Determine destinations
-		if netlist:
-			for neuron in Node_object.neurons:
-				# Convert combined connections list to weighted connections dictionary with unique entries
-				if netlist[neuron]['FR'] == 0:
+		Nodes = []
+		for y in range(self.size[1]):
+			for x in range(self.size[0]):
+				for z in range(self.layers):
+					Nodes.append((x, y, z, 'n'))
+
+		current_node = Nodes.pop(0)
+		mapped_to_node = 0
+		previous_area = ''
+
+		for population in matrix:
+			population_name = population['population']
+			population_size = population['neurons']
+			neuron_counter = 0
+
+			if neuron_model.lower() == 'area' and mapped_to_node != 0 and (previous_area != population['population'].split('-')[0]):
+				# Continue to the next node, even if the current one is not full yet, in case different neuron
+				# models per node are not allowed
+				current_node = Nodes.pop(0)
+				mapped_to_node = 0
+
+			try:
+				while neuron_counter < population_size:
+					if mapped_to_node < NpN:
+						tally = min(population_size - neuron_counter, NpN - mapped_to_node)
+						self.nodes[current_node].neurons.append((tally, population_name))
+						mapped_to_node += tally
+						neuron_counter += tally
+						neurons_placed += tally
+						if round(neurons_placed / network_size * 1000) / 10 > ratio:
+							ratio = round(neurons_placed / network_size * 1000) / 10
+							print(
+								f'Mapping neurons to network\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
+
+					else:
+						check_sum = sum([tally for tally, pop in self.nodes[current_node].neurons])
+						if check_sum != NpN:
+							sim_log.error(
+								f'Expected number of neurons mapped to node {current_node} is {mapped_to_node}.\n'
+								f'Actual number = {check_sum}.\n'
+								f'Node contains the following neurons: {self.nodes[current_node].neurons}')
+							raise sim_log.MappingError
+
+						current_node = Nodes.pop(0)
+						mapped_to_node = 0
+			except IndexError:
+				sim_log.error(
+					f'All nodes have been filled.\n{neurons_placed} neurons have been placed, '
+					f'{network_size - neurons_placed} have not.')
+				raise sim_log.MappingError()
+
+			try:
+				if neuron_model.lower() == 'population':
+					# Continue to the next node, even if the current one is not full yet, in case different neuron
+					# models per node are not allowed
+					current_node = Nodes.pop(0)
+					mapped_to_node = 0
+			except IndexError:
+				if matrix.index(population) == len(matrix) - 1:
 					continue
-				destinations_neuron = \
-					[netlist[connection]['location'] for connection in netlist[neuron]['connected_to']]
+				else:
+					raise sim_log.MappingError
 
-				destinations_node[neuron] = destinations_neuron
-				number_of_spikes += netlist[neuron]['FR']
-				for target in destinations_neuron:
-					destinations[target] = destinations.get(target, 0) + netlist[neuron]['FR']
-		elif matrix:
-			populations = [item['population'] for item in matrix]
-			for (tally, population) in Node_object.neurons:
-				population_index = populations.index(population)
-				if matrix[population_index].get('FR', 1) == 0:
-					continue
+			previous_area = population['population'].split('-')
 
-				for i in range(tally):
-					destinations_neuron = self.destinations_matrix(population_index, matrix)
+		sim_log.message(
+			f'Mapped {network_size} neurons to hardware in {convert_time(time.time() - T0)}.\n'
+			f'Hardware utilization: {round(network_size / (self.size[0] ** 2 * self.layers * NpN) * 1000) / 10}%\n')
 
-					neuron_ID = f'{Node_ID}_{population}_{i}'
-					destinations_node[neuron_ID] = destinations_neuron
-					number_of_spikes += matrix[population_index].get('FR', 1)
-					for target in destinations_neuron:
-						destinations[target] = destinations.get(target, 0) + matrix[population_index].get('FR', 1)
-		else:
-			sim_log.error(
-				f'Either a NN netlist or a connectivity probability matrix is required to run the simulation.\n'
-				f'Abort!')
-			raise sim_log.SimError
+	def space_filling_curve(self, NpN, matrix, sort = True, neuron_model = 'population', **_kwargs):
+		# Fill the network nodes following a Space filling curve
+		# To get a better understanding of how the Hilbert-curve is created,
+		# take a look at https://en.wikipedia.org/wiki/Hilbert_curve
+		# Iin this method, the general approach is altered to work with non power of 2 network dimensions
+		sim_log.message('Determining mapping of neurons... (following a surface filling curve)')
 
-		occupied_links, routes_phase3, distances = \
-			self.broadcastfirst_postphase(
-				destinations_node, routes_pre_phase, number_of_spikes, distances_to_hubs, routing_fnc)
+		T0 = time.time()
+		if (self.size[0] - self.size[1]) ** 2 > 1:
+			sim_log.error('Space filling curve mapping only works in square networks with Nx = Ny, not rectangles...')
+			raise sim_log.MappingError
 
-		for destination, firerate in destinations.items():
-			for link in routes_phase3[destination]:
-				occupied_links[link] = occupied_links.get(link, 0) + firerate
+		sub_sections = [('A', (0, 0), (self.size[0] - 1, self.size[0] - 1))]
+		fill_path = []
+		print(f'Calculating surface filling curve...', end='\r')
 
-		for neuron, destinations_neuron in destinations_node.items():
-			latency.update({
-				neuron: max([distances[target_Node] for target_Node in set(destinations_neuron)])
-			})
+		while sub_sections:
+			current_section = sub_sections.pop(0)
+			section_size = (current_section[2][0] - current_section[1][0] + 1, current_section[2][1] - current_section[1][1] + 1)
 
-		return Node_ID, occupied_links, number_of_spikes, latency
+			if section_size == (2, 2):
+				curve = [(0, 1), (1, 0), (0, -1)]
+				fill_path += self.append_curve(curve, current_section[0], current_section[1], current_section[2])
 
-	def broadcastfirst_local_multicast(
-		self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, **kargs):
-		routing_fnc = self.routing_algorithm(routing_type)
-		latency = {}
-		destinations = {}
-		number_of_spikes = 0
-		destinations_node = {}
+			elif section_size == (3, 2) or section_size == (2, 3):
+				curve = [(0, 1), (0, 1), (1, 0), (0, -1), (0, -1)]
+				fill_path += self.append_curve(curve, current_section[0], current_section[1], current_section[2])
 
-		routes_pre_phase, distances_to_hubs = self.broadcastfirst_prephase(Node_ID, routing_fnc)
+			elif section_size == (3, 3):
+				curve = [(1, 0), (0, 1), (-1, 0), (0, 1), (1, 0), (1, 0), (0, -1), (0, -1)]
+				fill_path += self.append_curve(curve, current_section[0], current_section[1], current_section[2])
 
-		# Determine destinations
-		if netlist:
-			for neuron in Node_object.neurons:
-				# Convert combined connections list to weighted connections dictionary with unique entries
-				if netlist[neuron]['FR'] == 0:
-					continue
-				destinations_neuron = \
-					[netlist[connection]['location'] for connection in netlist[neuron]['connected_to']]
+			elif section_size == (4, 3) or section_size == (3, 4):
+				curve = [(1, 0), (0, 1), (-1, 0), (0, 1), (1, 0), (1, 0), (1, 0), (0, -1), (-1, 0), (0, -1), (1, 0)]
+				fill_path += self.append_curve(curve, current_section[0], current_section[1], current_section[2])
 
-				# Remove duplicate target nodes for a single neuron
-				destinations_neuron = list(set(destinations_neuron))
+			else:
+				# Divide current section into four smaller sections and add them to begin of the sub_section list
+				sub_sections = self.hilbert_curve_conversion(current_section) + sub_sections
 
-				destinations_node[neuron] = destinations_neuron
-				number_of_spikes += netlist[neuron]['FR']
-				for target in destinations_neuron:
-					destinations[target] = destinations.get(target, 0) + netlist[neuron]['FR']
-		elif matrix:
-			populations = [item['population'] for item in matrix]
-			for (tally, population) in Node_object.neurons:
-				population_index = populations.index(population)
-				if matrix[population_index].get('FR', 1) == 0:
-					continue
+		areas_size_matrix, area_populations = extract_areas(matrix)
+		matrix_dict = {
+			pop['population']: {'neurons': pop['neurons'], 'connectivity_prob': pop['connectivity_prob']} for
+			pop in matrix}
 
-				for i in range(tally):
-					destinations_neuron = self.destinations_nodes_matrix(population_index, matrix)
+		if sort:
+			areas_size_matrix = sort_groups(areas_size_matrix)
 
-					neuron_ID = f'{Node_ID}_{population}_{i}'
-					destinations_node[neuron_ID] = destinations_neuron
-					number_of_spikes += matrix[population_index].get('FR', 1)
-					for target in destinations_neuron:
-						destinations[target] = destinations.get(target, 0) + matrix[
-							population_index].get('FR', 1)
-		else:
-			sim_log.error(
-				f'Either a NN netlist or a connectivity probability matrix is required to run the simulation.\n'
-				f'Abort!')
-			raise sim_log.SimError
+		network_size = sum([population["neurons"] for population in matrix])
+		ratio = 0
+		neurons_placed = 0
+		print(f'Mapping neurons to network, following a surface filling curve\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
 
-		occupied_links, routes_phase3, distances = \
-			self.broadcastfirst_postphase(
-				destinations_node, routes_pre_phase, number_of_spikes, distances_to_hubs, routing_fnc)
 		try:
-			for destination, firerate in destinations.items():
-				for link in routes_phase3[destination]:
-					occupied_links[link] = occupied_links.get(link, 0) + firerate
-		except KeyError:
-			for dest in destinations.keys():
-				print(f'{dest}: ', end='')
-				print(routes_phase3)
+			current_column = fill_path.pop(0)
+			layer = 0
+			for j in range(len(areas_size_matrix)):
+				area_name = areas_size_matrix[j]['area']
+				for population in area_populations[area_name]:
+					population_name = area_name + '-' + population
+					population_size = matrix_dict[population_name]['neurons']
+					neuron_counter = 0
 
-		for neuron, destinations_neuron in destinations_node.items():
-			latency.update({
-				neuron: max([distances[target_Node] for target_Node in set(destinations_neuron)])
-			})
+					while neuron_counter < population_size:
+						current_node = (current_column[0], current_column[1], layer, 'n')
+						mapped_to_node = sum([tally for tally, pop in self.nodes[current_node].neurons])
+						tally = min(population_size - neuron_counter, NpN - mapped_to_node)
 
-		return Node_ID, occupied_links, number_of_spikes, latency
+						self.nodes[current_node].neurons.append((tally, population_name))
+						neuron_counter += tally
+						neurons_placed += tally
 
-	def broadcastfirst_multicast(self, Node_ID, Node_object, routing_type, netlist = None, matrix = None, **kargs):
-		routing_fnc = self.routing_algorithm(routing_type)
-		latency = {}
-		destinations_node = {}
-		firing_rate = {}
+						if round(neurons_placed / network_size * 1000) / 10 > ratio:
+							ratio = round(neurons_placed / network_size * 1000) / 10
+							print(
+								f'Mapping neurons to network, following a surface filling curve\t| {" " * (ratio < 10)}{ratio} % |', end='\r')
 
-		routes_pre_phase, distances_to_hubs = self.broadcastfirst_prephase(Node_ID, routing_fnc)
+						if mapped_to_node + tally == NpN:
+							layer += 1
+						elif mapped_to_node + tally > NpN:
+							raise sim_log.MappingError
 
-		# Determine destinations
-		if netlist:
-			for neuron in Node_object.neurons:
-				if netlist[neuron]['FR'] == 0:
-					continue
-				destinations = \
-					[netlist[connection]['location'] for connection in netlist[neuron]['connected_to']]
+						if layer == self.layers:
+							current_column = fill_path.pop(0)
+							layer = 0
 
-				# Remove duplicate target nodes
-				destinations = list(set(destinations))
-				destinations_node[neuron] = destinations
-				firing_rate[neuron] = netlist[neuron]['FR']
-		elif matrix:
-			populations = [item['population'] for item in matrix]
-			for (tally, population) in Node_object.neurons:
-				population_index = populations.index(population)
-				if matrix[population_index].get('FR', 1) == 0:
-					continue
-				for i in range(tally):
-					destinations = self.destinations_nodes_matrix(population_index, matrix)
+					if neuron_model.lower() == 'population':
+						# Continue to the next node, even if the current one is not full yet, in case different neuron
+						# models per node are not allowed
+						layer += 1
+						if layer == self.layers:
+							current_column = fill_path.pop(0)
+							layer = 0
 
-					# Remove duplicate target nodes
-					destinations = list(set(destinations))
+				try:
+					if (neuron_model.lower() == 'population' or neuron_model.lower() == 'area') and layer != 0:
+						# Continue to the next column, even if the current one is not full yet, in case different neuron
+						# models per node are not allowed
+						current_column = fill_path.pop(0)
+						layer = 0
+				except IndexError:
+					if matrix.index(population) == len(matrix) - 1:
+						continue
+					else:
+						raise sim_log.MappingError
 
-					neuron_ID = f'{Node_ID}_{population}_{i}'
-					destinations_node[neuron_ID] = destinations
-					firing_rate[neuron_ID] = matrix[population_index].get('FR', 1)
-		else:
+		except IndexError:
 			sim_log.error(
-				f'Either a NN netlist or a connectivity probability matrix is required to run the simulation.\n'
-				f'Abort!')
-			raise sim_log.SimError
+				f'All nodes have been filled.\n{neurons_placed} neurons have been placed, '
+				f'{network_size - neurons_placed} have not.')
 
-		number_of_spikes = sum(firing_rate.values())
+		sim_log.message(
+			f'Mapped {network_size} neurons to hardware in {convert_time(time.time() - T0)}.\n'
+			f'Hardware utilization: {round(network_size / (self.size[0] ** 2 * self.layers * NpN) * 1000) / 10}%\n')
 
-		occupied_links, routes_phase3, distances = \
-			self.broadcastfirst_postphase(
-				destinations_node, routes_pre_phase, number_of_spikes, distances_to_hubs, routing_fnc)
+	# Mapping Sub-methods
+	@staticmethod
+	def hilbert_curve_conversion(subsection):
+		area_type = subsection[0]
+		LL_corner, UR_corner = subsection[1], subsection[2]
 
-		for neuron, destinations_neuron in destinations_node.items():
-			neuron_route = []
-			for destination in destinations_neuron:
-				neuron_route += routes_phase3[destination]
+		split_hor = (UR_corner[0] - LL_corner[0] + 1) / 2
+		split_ver = (UR_corner[1] - LL_corner[1] + 1) / 2
 
-			# Remove duplicates
-			neuron_route = list(set(neuron_route))
+		if area_type == 'A':
+			if (UR_corner[0] - LL_corner[0] + 1) % 2:
+				split_hor = int(LL_corner[0] + 2 * round(split_hor / 2))
+			else:
+				split_hor = int(LL_corner[0] + split_hor)
+			if (UR_corner[1] - LL_corner[1] + 1) % 2:
+				split_ver = int(LL_corner[1] + 2 * round(split_ver / 2))
+			else:
+				split_ver = int(LL_corner[1] + split_ver)
 
-			for link in neuron_route:
-				occupied_links[link] = occupied_links.get(link, 0) + firing_rate[neuron]
+			division = [
+				('D', LL_corner, (split_hor - 1, split_ver - 1)),
+				('A', (LL_corner[0], split_ver), (split_hor - 1, UR_corner[1])),
+				('A', (split_hor, split_ver), UR_corner),
+				('B', (split_hor, LL_corner[1]), (UR_corner[0], split_ver - 1))]
+			return division
+		elif area_type == 'B':
+			if (UR_corner[0] - LL_corner[0] + 1) % 2:
+				split_hor = int(LL_corner[0] + 2 * round(split_hor / 2 - 0.5) + 1)
+			else:
+				split_hor = int(LL_corner[0] + split_hor)
+			if (UR_corner[1] - LL_corner[1] + 1) % 2:
+				split_ver = int(LL_corner[1] + 2 * round(split_ver / 2 - 0.5) + 1)
+			else:
+				split_ver = int(LL_corner[1] + split_ver)
+			division = [
+				('C', (split_hor, split_ver), UR_corner),
+				('B', (LL_corner[0], split_ver), (split_hor - 1, UR_corner[1])),
+				('B', LL_corner, (split_hor - 1, split_ver - 1)),
+				('A', (split_hor, LL_corner[1]), (UR_corner[0], split_ver - 1))]
+			return division
+		elif area_type == 'C':
+			if (UR_corner[0] - LL_corner[0] + 1) % 2:
+				split_hor = int(LL_corner[0] + 2 * round(split_hor / 2 - 0.5) + 1)
+			else:
+				split_hor = int(LL_corner[0] + split_hor)
+			if (UR_corner[1] - LL_corner[1] + 1) % 2:
+				split_ver = int(LL_corner[1] + 2 * round(split_ver / 2 - 0.5) + 1)
+			else:
+				split_ver = int(LL_corner[1] + split_ver)
 
-			latency[neuron] = max([distances[target_Node] for target_Node in destinations_neuron])
+			division = [
+				('B', (split_hor, split_ver), UR_corner),
+				('C', (split_hor, LL_corner[1]), (UR_corner[0], split_ver - 1)),
+				('C', LL_corner, (split_hor - 1, split_ver - 1)),
+				('D', (LL_corner[0], split_ver), (split_hor - 1, UR_corner[1]))]
+			return division
+		else:  # area_type == 'D'
+			if (UR_corner[0] - LL_corner[0] + 1) % 2:
+				split_hor = int(LL_corner[0] + 2 * round(split_hor / 2))
+			else:
+				split_hor = int(LL_corner[0] + split_hor)
+			if (UR_corner[1] - LL_corner[1] + 1) % 2:
+				split_ver = int(LL_corner[1] + 2 * round(split_ver / 2))
+			else:
+				split_ver = int(LL_corner[1] + split_ver)
 
-		return Node_ID, occupied_links, number_of_spikes, latency
+			division = [
+				('A', LL_corner, (split_hor - 1, split_ver - 1)),
+				('D', (split_hor, LL_corner[1]), (UR_corner[0], split_ver - 1)),
+				('D', (split_hor, split_ver), UR_corner),
+				('C', (LL_corner[0], split_ver), (split_hor - 1, UR_corner[1]))]
+			return division
 
-	# Casting sub-Methods
-	def broadcastfirst_prephase(self, Node_ID, routing_fnc):
-		# Phase 1 of casting: move toward the nearest hub
-		route_to_closest_hub, distance_to_closest_hub, start_hub = self.route_to_closest_hub(Node_ID, routing_fnc)
-		distances_to_hubs = {Node_ID: distance_to_closest_hub}
+	@staticmethod
+	def append_curve(curve, section_type, lower_left, upper_right):
+		path = []
+		if section_type == 'A':
+			x, y = lower_left
+			path.append((x, y))
+			for dx, dy in curve:
+				x += dx
+				y += dy
+				path.append((x, y))
+		elif section_type == 'B':
+			x, y = upper_right
+			path.append((x, y))
+			for dy, dx in curve:
+				x -= dx
+				y -= dy
+				path.append((x, y))
+		elif section_type == 'C':
+			x, y = upper_right
+			path.append((x, y))
+			for dx, dy in curve:
+				x -= dx
+				y -= dy
+				path.append((x, y))
+		else:  # section_type == 'D'
+			x, y = lower_left
+			path.append((x, y))
+			for dy, dx in curve:
+				x += dx
+				y += dy
+				path.append((x, y))
 
-		# The combined routes from phase 1 and 2 are used once for every spike send out from this node
-		routes_pre_phase = route_to_closest_hub + [(self.closest_hub(Node_ID), 'Spectrum')]
-		for hub in self.hubs:
-			distances_to_hubs[hub] = distance_to_closest_hub + self.spectrum.weight
+		return path
 
-		return routes_pre_phase, distances_to_hubs
-
-	def broadcastfirst_postphase(
-		self, destinations_node, routes_pre_phase3, number_of_spikes, distances_to_hubs, routing_fnc):
-		occupied_links = {}
-		for link in routes_pre_phase3:
-			occupied_links[link] = number_of_spikes
-
-		# Phase 3 of casting: From the hubs to all surround destination nodes
-		all_destinations = list(set(
-			[destination for dest_list in destinations_node.values() for destination in dest_list]))
-		routes_phase3, distances = self.route_hubs_to_nodes(all_destinations, distances_to_hubs, routing_fnc)
-
-		return occupied_links, routes_phase3, distances
-
-	def route_hubs_to_nodes(self, destinations, distances_to_hubs, routing_function):
-		distance = distances_to_hubs
-		closest_hubs = {}
-		routes = {}
-		for destination in destinations:
-			closest_hub = self.closest_hub(destination)
-			closest_hubs[closest_hub] = closest_hubs.get(closest_hub, []) + [destination]
-
-		for Hub, local_destinations in closest_hubs.items():
-			path_from_hub, distance_from_hub = routing_function(Hub, local_destinations)
-
-			for destination in local_destinations:
-				routes[destination] = []
-				current_node = destination
-				while current_node != Hub:
-					previous_node = path_from_hub[current_node]
-					routes[destination].append((previous_node, current_node))
-					current_node = previous_node
-
-				distance[destination] = distance[Hub] + distance_from_hub[destination] - t_router
-		return routes, distance
-
-	"""
-	================
-	Output functions
-	================
-	"""
-	def readout(self, unused, compressed = None):
+	####################################################################################################################
+	# Output Methods
+	####################################################################################################################
+	def readout(self, unused):
 		output = {}
 		int_lst = []
 		ext_lst = []
-		router_total = []
+		merger_total = []
+		switch_total = []
 		link_lst = []
 		for node in self.nodes.keys():
-			output[str(node)] = {
-				'int_packets_handled': self.nodes[node].int_packets_handled,
-				'ext_packets_handled': self.nodes[node].ext_packets_handled,
-				'edges': {}
-			}
-			if self.nodes[node].int_packets_handled or not unused:
-				int_lst.append(self.nodes[node].int_packets_handled)
-			if self.nodes[node].ext_packets_handled or not unused:
-				ext_lst.append(self.nodes[node].ext_packets_handled)
-			if (self.nodes[node].ext_packets_handled or self.nodes[node].int_packets_handled) or not unused:
-				router_total.append(self.nodes[node].int_packets_handled + self.nodes[node].ext_packets_handled)
-			output['Spectrum'] = {'Delay': self.spectrum.weight, 'Bandwidth': self.spectrum.packets_handled}
+			if node[2] == 'm':
+				output[str(node)] = {
+					'packets_handled': self.nodes[node].ext_packets_handled,
+					'edges': {}
+				}
+				if self.nodes[node].ext_packets_handled or not unused:
+					merger_total.append(self.nodes[node].ext_packets_handled)
+			elif node[3] == 's':
+				output[str(node)] = {
+					'packets_handled': self.nodes[node].ext_packets_handled,
+					'edges': {}
+				}
+				if self.nodes[node].ext_packets_handled or not unused:
+					switch_total.append(self.nodes[node].ext_packets_handled)
+
+				for key, edge in self.nodes[node].edges.items():
+					try:
+						if key[3] == 's' and (
+								not unused or edge.packets_handled or self.nodes[node].edges[key].packets_handled):
+							link_lst.append(edge.packets_handled)
+					except IndexError:
+						continue
+			elif node[3] == 'n':
+				output[str(node)] = {
+					'int_packets_handled': self.nodes[node].int_packets_handled,
+					'ext_packets_handled': self.nodes[node].ext_packets_handled,
+					'edges': {}
+				}
+				if self.nodes[node].int_packets_handled or not unused:
+					int_lst.append(self.nodes[node].int_packets_handled)
+				if self.nodes[node].ext_packets_handled or not unused:
+					ext_lst.append(self.nodes[node].ext_packets_handled)
+			else:
+				sim_log.error(
+					f'Trying to read out node {node}.\n'
+					f'However, the node is not defined as either a switch, merger or processing unit.')
+
 			for key, edge in self.nodes[node].edges.items():
-				if not key == 'Spectrum':
-					output[str(node)]['edges'][str(key)] = {
-						'length': edge.weight, 'packets_handled': edge.packets_handled}
+				output[str(node)]['edges'][str(key)] = {'length': edge.weight, 'packets_handled': edge.packets_handled}
 
-				if not unused or edge.packets_handled or self.nodes[key].edges[node].packets_handled:
-					link_lst.append(edge.packets_handled)
-
-		output['int_packets_handled'] = {
+		output['packets_generated'] = {
 			'average': statistics.mean(int_lst),
 			'min': min(int_lst),
 			'max': max(int_lst),
 			'median': statistics.median(int_lst)
 		}
-		output['ext_packets_handled'] = {
+		output['packets_received_per_node'] = {
 			'average': statistics.mean(ext_lst),
 			'min': min(ext_lst),
 			'max': max(ext_lst),
 			'median': statistics.median(ext_lst)
 		}
-		output['packets_handled_per_node'] = {
-			'average': statistics.mean(router_total),
-			'min': min(router_total),
-			'max': max(router_total),
-			'median': statistics.median(router_total)
+		output['packets_per_switch'] = {
+			'average': statistics.mean(switch_total),
+			'min': min(switch_total),
+			'max': max(switch_total),
+			'median': statistics.median(switch_total)
 		}
-		output['spikes_per_link_primary_layer'] = {
+		output['packets_per_merger'] = {
+			'average': statistics.mean(merger_total),
+			'min': min(merger_total),
+			'max': max(merger_total),
+			'median': statistics.median(merger_total)
+		}
+		output['spikes_per_link'] = {
 			'average': statistics.mean(link_lst),
 			'min': min(link_lst),
 			'max': max(link_lst),
 			'median': statistics.median(link_lst)
 		}
 
-		if not compressed:
-			return output
-		elif compressed.lower() == 'node':
-			return router_total
-		elif compressed.lower() == 'link':
-			return link_lst
+		return output
+

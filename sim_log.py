@@ -1,7 +1,8 @@
 """
 sim_log.py
 
-Copyright (C) 2022, R. Kleijnen, Forschungszentrum Jülich, Central Institute of Engineering, Electronics and Analytics—Electronic Systems (ZEA-2)
+Copyright (C) 2022, R. Kleijnen, Forschungszentrum Jülich,
+Central Institute of Engineering, Electronics and Analytics—Electronic Systems (ZEA-2)
 
 This file is part of NeuCoNS.
 NeuCoNS is a free application: you can redistribute it and/or modify it under the terms
@@ -87,59 +88,59 @@ def end_log(run_time):
 		f'================================================================================================\n')
 
 
-def message(message):
+def message(log_message):
 	with open(log_file, 'a') as file:
-		file.write(f'{message}\n')
+		file.write(f'{log_message}\n')
 
 
-def notice(message):
+def notice(log_message):
 	global notice_counter
 	notice_counter += 1
 	with open(log_file, 'a') as file:
 		file.write(
 			f'NOTICE!\n'
-			f'{message}\n')
+			f'{log_message}\n')
 	print(
 		f'NOTICE!\n'
-		f'{message}\n')
+		f'{log_message}\n')
 
 
-def warning(message):
+def warning(log_message):
 	global warning_counter
 	warning_counter += 1
 	with open(log_file, 'a') as file:
 		file.write(
 			f'WARNING!\n'
-			f'{message}\n')
+			f'{log_message}\n')
 	print(
 		f'WARNING!\n'
-		f'{message}\n')
+		f'{log_message}\n')
 
 
-def error(message):
+def error(log_message):
 	global error_counter
 	error_counter += 1
 	with open(log_file, 'a') as file:
 		file.write(
 			f'ERROR!\n'
-			f'{message}\n\n')
+			f'{log_message}\n\n')
 	print(
 		f'ERROR\n'
-		f'{message}\n\n')
+		f'{log_message}\n\n')
 
 
-def fatal_error(message):
+def fatal_error(log_message):
 	with open(log_file, 'a') as file:
 		file.write(
 			f"\n\nFATAL ERROR\n"
-			f"{message}\n\n"
+			f"{log_message}\n\n"
 			f"Number of Notifications: {notice_counter}\n"
 			f"Number of WARNINGS: {warning_counter}\n"
 			f"Number of ERRORS: {error_counter}\n"
 			f"Simulation terminated at: {time.ctime()}")
 	print(
 		f"FATAL ERROR\n"
-		f"{message}\n\n"
+		f"{log_message}\n\n"
 		f"Number of WARNINGS: {warning_counter}\n"
 		f"Number of ERRORS: {error_counter}\n\n"
 		f"Simulation terminated at: {time.ctime()}")
